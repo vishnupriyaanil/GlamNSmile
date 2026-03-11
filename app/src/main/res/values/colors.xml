@@ -1,0 +1,12 @@
+<resources>
+    <color name="slate_950">#08131B</color>
+    <color name="slate_900">#102332</color>
+    <color name="accent_teal">#32C2B9</color>
+    <color name="sand_300">#F4D9A6</color>
+    <color name="mist_50">#EEF7FB</color>
+    <color name="mist_50_dim">#C8D6DE</color>
+    <color name="surface_panel">#D9192835</color>
+    <color name="surface_panel_strong">#F0141F28</color>
+    <color name="status_outline">#334E6371</color>
+    <color name="permission_scrim">#B308131B</color>
+</resources>

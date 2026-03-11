@@ -1,0 +1,25 @@
+<resources>
+    <string name="app_name">Face Analysis</string>
+    <string name="face_analysis_title">Live face analysis</string>
+    <string name="analysis_subtitle">On-device face detection with heuristic wrinkle, age band, and skin tone estimates.</string>
+    <string name="permission_title">Camera access needed</string>
+    <string name="permission_body">Grant camera permission to analyze faces live on the device.</string>
+    <string name="grant_camera_access">Grant camera access</string>
+    <string name="switch_to_back_camera">Use rear camera</string>
+    <string name="switch_to_front_camera">Use front camera</string>
+    <string name="front_camera_label">Front camera</string>
+    <string name="back_camera_label">Rear camera</string>
+    <string name="metric_face_count">Face count</string>
+    <string name="metric_tracking_id">Tracking ID</string>
+    <string name="metric_smile">Smile probability</string>
+    <string name="metric_left_eye">Left eye open</string>
+    <string name="metric_right_eye">Right eye open</string>
+    <string name="metric_yaw">Yaw</string>
+    <string name="metric_pitch">Pitch</string>
+    <string name="metric_roll">Roll</string>
+    <string name="metric_wrinkles">Wrinkle visibility</string>
+    <string name="metric_age_band">Age band estimate</string>
+    <string name="metric_skin_tone">Skin tone estimate</string>
+    <string name="heuristic_notice">Wrinkle, age, and skin tone values are heuristic estimates. Lighting, makeup, filters, and camera quality can change the result.</string>
+    <string name="value_not_available">--</string>
+</resources>

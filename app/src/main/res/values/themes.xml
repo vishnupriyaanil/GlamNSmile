@@ -1,0 +1,13 @@
+<resources>
+    <style name="Theme.GlamNSmile" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/accent_teal</item>
+        <item name="colorOnPrimary">@color/slate_950</item>
+        <item name="colorSecondary">@color/sand_300</item>
+        <item name="colorSurface">@color/slate_900</item>
+        <item name="colorOnSurface">@color/mist_50</item>
+        <item name="android:windowBackground">@color/slate_950</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@color/slate_950</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>
