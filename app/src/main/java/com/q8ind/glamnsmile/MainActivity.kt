@@ -1,4 +1,4 @@
-package com.glamnsmile.faceanalysis
+package com.q8ind.glamnsmile
 
 import android.Manifest
 import android.content.pm.PackageManager
@@ -17,7 +17,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.updateLayoutParams
 import androidx.core.view.updatePadding
-import com.glamnsmile.faceanalysis.databinding.ActivityMainBinding
+import com.q8ind.glamnsmile.databinding.ActivityMainBinding
 import com.google.mlkit.vision.face.FaceDetection
 import com.google.mlkit.vision.face.FaceDetector
 import com.google.mlkit.vision.face.FaceDetectorOptions
@@ -107,6 +107,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun applyWindowInsets() {
+        val bottomSafeSpacing = resources.getDimensionPixelSize(R.dimen.bottom_safe_spacing)
         val statusCardTopMargin =
             (binding.statusCard.layoutParams as ConstraintLayout.LayoutParams).topMargin
         val metricsCardBottomMargin =
@@ -124,14 +125,14 @@ class MainActivity : AppCompatActivity() {
             }
 
             binding.metricsCard.updateLayoutParams<ConstraintLayout.LayoutParams> {
-                bottomMargin = metricsCardBottomMargin + systemBars.bottom
+                bottomMargin = metricsCardBottomMargin + systemBars.bottom + bottomSafeSpacing
             }
 
             binding.permissionOverlay.updatePadding(
                 left = permissionOverlayLeftPadding + systemBars.left,
                 top = permissionOverlayTopPadding + systemBars.top,
                 right = permissionOverlayRightPadding + systemBars.right,
-                bottom = permissionOverlayBottomPadding + systemBars.bottom,
+                bottom = permissionOverlayBottomPadding + systemBars.bottom + bottomSafeSpacing,
             )
 
             insets

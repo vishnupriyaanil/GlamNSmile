@@ -1,4 +1,4 @@
-package com.glamnsmile.faceanalysis
+package com.q8ind.glamnsmile
 
 data class FaceAnalysisUiState(
     val statusText: String = "Point the camera at a face to begin analysis.",

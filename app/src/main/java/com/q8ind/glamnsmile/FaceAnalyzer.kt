@@ -1,4 +1,4 @@
-package com.glamnsmile.faceanalysis
+package com.q8ind.glamnsmile
 
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
