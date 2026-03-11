@@ -3,6 +3,7 @@ package com.glamnsmile.faceanalysis
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
+import androidx.constraintlayout.widget.ConstraintLayout
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
@@ -11,6 +12,11 @@ import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
 import androidx.core.view.isVisible
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.updateLayoutParams
+import androidx.core.view.updatePadding
 import com.glamnsmile.faceanalysis.databinding.ActivityMainBinding
 import com.google.mlkit.vision.face.FaceDetection
 import com.google.mlkit.vision.face.FaceDetector
@@ -43,8 +49,10 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        applyWindowInsets()
 
         cameraExecutor = Executors.newSingleThreadExecutor()
         faceDetector = FaceDetection.getClient(createFaceDetectorOptions())
@@ -96,6 +104,40 @@ class MainActivity : AppCompatActivity() {
 
     private fun requestCameraPermission() {
         cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+    }
+
+    private fun applyWindowInsets() {
+        val statusCardTopMargin =
+            (binding.statusCard.layoutParams as ConstraintLayout.LayoutParams).topMargin
+        val metricsCardBottomMargin =
+            (binding.metricsCard.layoutParams as ConstraintLayout.LayoutParams).bottomMargin
+        val permissionOverlayLeftPadding = binding.permissionOverlay.paddingLeft
+        val permissionOverlayTopPadding = binding.permissionOverlay.paddingTop
+        val permissionOverlayRightPadding = binding.permissionOverlay.paddingRight
+        val permissionOverlayBottomPadding = binding.permissionOverlay.paddingBottom
+
+        ViewCompat.setOnApplyWindowInsetsListener(binding.root) { _, insets ->
+            val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+
+            binding.statusCard.updateLayoutParams<ConstraintLayout.LayoutParams> {
+                topMargin = statusCardTopMargin + systemBars.top
+            }
+
+            binding.metricsCard.updateLayoutParams<ConstraintLayout.LayoutParams> {
+                bottomMargin = metricsCardBottomMargin + systemBars.bottom
+            }
+
+            binding.permissionOverlay.updatePadding(
+                left = permissionOverlayLeftPadding + systemBars.left,
+                top = permissionOverlayTopPadding + systemBars.top,
+                right = permissionOverlayRightPadding + systemBars.right,
+                bottom = permissionOverlayBottomPadding + systemBars.bottom,
+            )
+
+            insets
+        }
+
+        ViewCompat.requestApplyInsets(binding.root)
     }
 
     private fun hasCameraPermission(): Boolean {
