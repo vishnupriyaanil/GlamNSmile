@@ -5,6 +5,7 @@ import java.util.Properties
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.google.services)
 }
 
 val localProperties = Properties().apply {
@@ -30,6 +31,11 @@ android {
             "String",
             "GEMINI_API_KEY",
             "\"${localProperties.getProperty("GEMINI_API_KEY", "")}\"",
+        )
+        buildConfigField(
+            "String",
+            "OPENAI_API_KEY",
+            "\"${localProperties.getProperty("OPENAI_API_KEY", "")}\"",
         )
     }
 
@@ -65,6 +71,7 @@ tasks.withType<KotlinCompile>().configureEach {
 }
 
 dependencies {
+    implementation(platform(libs.firebase.bom))
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
     implementation(libs.material)
@@ -77,6 +84,9 @@ dependencies {
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
     implementation(libs.mlkit.face.detection)
+    implementation(libs.firebase.auth)
+    implementation(libs.firebase.firestore)
+    implementation(libs.guava)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

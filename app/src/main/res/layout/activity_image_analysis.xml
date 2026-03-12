@@ -36,39 +36,28 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:padding="18dp">
+            android:padding="10dp">
 
-            <LinearLayout
+            <com.google.android.material.appbar.MaterialToolbar
+                android:id="@+id/captureToolbar"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:gravity="center_vertical"
-                android:orientation="horizontal">
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/backButton"
-                    style="@style/Widget.Material3.Button.TextButton"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:minWidth="0dp"
-                    android:textColor="@color/accent_teal"
-                    android:text="@string/back_label" />
-
-                <TextView
-                    android:id="@+id/captureTitleText"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="8dp"
-                    android:layout_weight="1"
-                    android:text="@string/image_capture_title"
-                    android:textAppearance="?attr/textAppearanceTitleMedium"
-                    android:textColor="@color/sand_300" />
-            </LinearLayout>
+                android:background="@android:color/transparent"
+                android:minHeight="56dp"
+                app:navigationIcon="@drawable/ic_toolbar_back"
+                app:navigationIconTint="@color/accent_teal"
+                app:subtitle="@string/image_capture_subtitle"
+                app:subtitleTextColor="@color/mist_50_dim"
+                app:title="@string/image_capture_title"
+                app:titleTextColor="@color/mist_50" />
 
             <TextView
                 android:id="@+id/statusText"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
                 android:layout_marginTop="10dp"
+                android:layout_marginEnd="8dp"
                 android:textAppearance="?attr/textAppearanceBodyLarge"
                 android:textColor="@color/mist_50" />
         </LinearLayout>
@@ -176,6 +165,7 @@
                         android:padding="12dp">
 
                         <TextView
+                            android:id="@+id/detectionMetricLabel"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:text="@string/image_capture_face_count"

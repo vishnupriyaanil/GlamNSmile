@@ -10,4 +10,22 @@
         <item name="android:navigationBarColor">@color/slate_950</item>
         <item name="android:windowLightStatusBar">false</item>
     </style>
+
+    <style name="ThemeOverlay.GlamNSmile.AdminDialog" parent="ThemeOverlay.Material3.MaterialAlertDialog">
+        <item name="alertDialogStyle">@style/Widget.GlamNSmile.AdminAlertDialog</item>
+        <item name="colorSurface">@color/surface_panel_strong</item>
+        <item name="colorOnSurface">@color/mist_50</item>
+        <item name="colorOnSurfaceVariant">@color/mist_50_dim</item>
+        <item name="android:textColorPrimary">@color/mist_50</item>
+        <item name="android:textColorSecondary">@color/mist_50_dim</item>
+        <item name="materialAlertDialogTitleTextStyle">@style/TextAppearance.GlamNSmile.AdminDialog.Title</item>
+    </style>
+
+    <style name="Widget.GlamNSmile.AdminAlertDialog" parent="MaterialAlertDialog.Material3">
+        <item name="backgroundTint">@color/surface_panel_strong</item>
+    </style>
+
+    <style name="TextAppearance.GlamNSmile.AdminDialog.Title" parent="MaterialAlertDialog.Material3.Title.Text">
+        <item name="android:textColor">?attr/colorOnSurface</item>
+    </style>
 </resources>

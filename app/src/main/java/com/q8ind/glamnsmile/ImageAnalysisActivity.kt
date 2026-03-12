@@ -35,13 +35,14 @@ class ImageAnalysisActivity : AppCompatActivity() {
     private lateinit var binding: ActivityImageAnalysisBinding
     private lateinit var cameraExecutor: ExecutorService
     private lateinit var analysisMode: AnalysisMode
+    private lateinit var analysisProvider: AnalysisProvider
 
     private var cameraProvider: ProcessCameraProvider? = null
     private var imageAnalysis: ImageAnalysis? = null
     private var imageCapture: ImageCapture? = null
     private var faceDetector: FaceDetector? = null
     private var lensFacing: Int = CameraSelector.LENS_FACING_FRONT
-    private var latestState: FaceCaptureUiState = FaceCaptureUiState.initial("Front camera")
+    private var latestState: FaceCaptureUiState = FaceCaptureUiState(statusText = "", guidanceText = "")
     private var isCaptureInProgress = false
     private val capturedImageFiles = mutableListOf<File>()
 
@@ -52,7 +53,7 @@ class ImageAnalysisActivity : AppCompatActivity() {
         if (granted) {
             startCamera()
         } else {
-            renderState(FaceCaptureUiState.permissionRequired())
+            renderState(FaceCaptureUiState.permissionRequired(analysisMode))
         }
     }
 
@@ -64,19 +65,24 @@ class ImageAnalysisActivity : AppCompatActivity() {
         applyWindowInsets()
 
         analysisMode = AnalysisMode.fromId(intent.getStringExtra(EXTRA_ANALYSIS_MODE))
+        analysisProvider = AnalysisProvider.fromId(intent.getStringExtra(EXTRA_ANALYSIS_PROVIDER))
         cameraExecutor = Executors.newSingleThreadExecutor()
-        faceDetector = FaceDetection.getClient(createFaceDetectorOptions())
+        faceDetector = if (analysisMode == AnalysisMode.FACIAL) {
+            FaceDetection.getClient(createFaceDetectorOptions())
+        } else {
+            null
+        }
 
         configureModeUi()
 
-        binding.backButton.setOnClickListener { finish() }
+        binding.captureToolbar.setNavigationOnClickListener { finish() }
         binding.switchCameraButton.setOnClickListener { toggleCamera() }
         binding.permissionButton.setOnClickListener { requestCameraPermission() }
         binding.analyzeButton.setOnClickListener { handlePrimaryAction() }
         binding.clearImagesButton.setOnClickListener { clearCapturedImages() }
 
         updateCameraSwitchLabel()
-        renderState(FaceCaptureUiState.initial(currentLensLabel()))
+        renderState(FaceCaptureUiState.initial(currentLensLabel(), analysisMode))
 
         val hasPermission = hasCameraPermission()
         updatePermissionUi(hasPermission)
@@ -104,9 +110,17 @@ class ImageAnalysisActivity : AppCompatActivity() {
     }
 
     private fun configureModeUi() {
-        binding.captureTitleText.text = getString(analysisMode.captureTitleRes)
+        binding.captureToolbar.title = getString(analysisMode.captureTitleRes)
+        binding.captureToolbar.subtitle = getString(analysisMode.captureSubtitleRes)
         binding.captureSubtitleText.text = getString(analysisMode.captureSubtitleRes)
         binding.captureProgressRow.isVisible = analysisMode.requiredImages > 1
+        binding.detectionMetricLabel.setText(
+            if (analysisMode == AnalysisMode.DENTAL) {
+                R.string.dental_capture_detection_label
+            } else {
+                R.string.image_capture_face_count
+            },
+        )
     }
 
     private fun toggleCamera() {
@@ -117,7 +131,7 @@ class ImageAnalysisActivity : AppCompatActivity() {
         }
         updateCameraSwitchLabel()
         if (hasCameraPermission()) {
-            renderState(FaceCaptureUiState.initial(currentLensLabel()))
+            renderState(FaceCaptureUiState.initial(currentLensLabel(), analysisMode))
             startCamera()
         }
     }
@@ -186,14 +200,21 @@ class ImageAnalysisActivity : AppCompatActivity() {
     }
 
     private fun bindCameraUseCases(provider: ProcessCameraProvider) {
-        val detector = faceDetector ?: return
         val targetRotation = binding.previewView.display?.rotation ?: Surface.ROTATION_0
         val preview = Preview.Builder()
             .setTargetRotation(targetRotation)
             .build()
             .also { it.surfaceProvider = binding.previewView.surfaceProvider }
 
-        val analyzer = FaceRecognitionAnalyzer(detector, cameraExecutor, ::onCaptureStateChanged)
+        val analyzer: ImageAnalysis.Analyzer = if (analysisMode == AnalysisMode.DENTAL) {
+            DentalRecognitionAnalyzer(::onCaptureStateChanged)
+        } else {
+            val detector = faceDetector ?: run {
+                renderState(FaceCaptureUiState.cameraError("Face detector is not ready.", analysisMode))
+                return
+            }
+            FaceRecognitionAnalyzer(detector, cameraExecutor, ::onCaptureStateChanged)
+        }
         val analysis = ImageAnalysis.Builder()
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
             .setTargetRotation(targetRotation)
@@ -217,11 +238,11 @@ class ImageAnalysisActivity : AppCompatActivity() {
             provider.unbindAll()
             provider.bindToLifecycle(this, selector, preview, analysis, capture)
             if (!isCaptureInProgress) {
-                renderState(FaceCaptureUiState.initial(currentLensLabel()))
+                renderState(FaceCaptureUiState.initial(currentLensLabel(), analysisMode))
             }
         } catch (error: Exception) {
             val message = error.localizedMessage ?: "Unknown camera binding error"
-            renderState(FaceCaptureUiState.cameraError(message))
+            renderState(FaceCaptureUiState.cameraError(message, analysisMode))
         }
     }
 
@@ -233,8 +254,8 @@ class ImageAnalysisActivity : AppCompatActivity() {
     }
 
     private fun handlePrimaryAction() {
-        if (analysisMode.requiredImages > 1 && capturedImageFiles.size >= analysisMode.requiredImages) {
-            launchAnalysisResult(capturedImageFiles.map(File::getAbsolutePath))
+        if (capturedImageFiles.size >= analysisMode.requiredImages && capturedImageFiles.isNotEmpty()) {
+            launchLeadDetails(capturedImageFiles.map(File::getAbsolutePath))
         } else {
             captureCurrentImage()
         }
@@ -255,10 +276,10 @@ class ImageAnalysisActivity : AppCompatActivity() {
         }
 
         isCaptureInProgress = true
-        renderState(FaceCaptureUiState.capturing())
+        renderState(FaceCaptureUiState.capturing(analysisMode))
         capture.targetRotation = binding.previewView.display?.rotation ?: Surface.ROTATION_0
 
-        val outputFile = File(cacheDir, "face-capture-${System.currentTimeMillis()}.jpg")
+        val outputFile = File(cacheDir, "${analysisMode.id}-capture-${System.currentTimeMillis()}.jpg")
         val outputOptions = ImageCapture.OutputFileOptions.Builder(outputFile).build()
 
         capture.takePicture(
@@ -267,11 +288,12 @@ class ImageAnalysisActivity : AppCompatActivity() {
             object : ImageCapture.OnImageSavedCallback {
                 override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
                     isCaptureInProgress = false
+                    capturedImageFiles += outputFile
 
-                    if (analysisMode.requiredImages == 1) {
-                        launchAnalysisResult(listOf(outputFile.absolutePath))
+                    if (capturedImageFiles.size >= analysisMode.requiredImages) {
+                        renderState(latestState.copy(errorMessage = null))
+                        launchLeadDetails(capturedImageFiles.map(File::getAbsolutePath))
                     } else {
-                        capturedImageFiles += outputFile
                         renderState(latestState.copy(errorMessage = null))
                     }
                 }
@@ -288,8 +310,8 @@ class ImageAnalysisActivity : AppCompatActivity() {
         )
     }
 
-    private fun launchAnalysisResult(imagePaths: List<String>) {
-        startActivity(AnalysisResultActivity.newIntent(this, analysisMode, imagePaths))
+    private fun launchLeadDetails(imagePaths: List<String>) {
+        startActivity(LeadDetailsActivity.newIntent(this, analysisMode, analysisProvider, imagePaths))
     }
 
     private fun clearCapturedImages() {
@@ -306,7 +328,11 @@ class ImageAnalysisActivity : AppCompatActivity() {
         runOnUiThread {
             binding.statusText.text = statusTextFor(state)
             binding.guidanceText.text = guidanceTextFor(state)
-            binding.faceCountValue.text = state.faceCount.toString()
+            binding.faceCountValue.text = if (analysisMode == AnalysisMode.DENTAL) {
+                getString(R.string.capture_signal_value, state.faceCount)
+            } else {
+                state.faceCount.toString()
+            }
             binding.readinessValue.text = state.readinessLabel
             binding.captureCountValue.text = getString(
                 R.string.capture_count_value,
@@ -358,14 +384,18 @@ class ImageAnalysisActivity : AppCompatActivity() {
     private fun primaryActionText(): String {
         return when {
             isCaptureInProgress -> getString(R.string.capturing_image)
+            analysisMode.requiredImages == 1 && capturedImageFiles.isNotEmpty() ->
+                getString(R.string.continue_to_details)
             analysisMode.requiredImages > 1 && capturedImageFiles.size < analysisMode.requiredImages ->
                 getString(
                     R.string.capture_image_step,
                     capturedImageFiles.size + 1,
                     analysisMode.requiredImages,
                 )
+            analysisMode.requiredImages > 1 && capturedImageFiles.size >= analysisMode.requiredImages ->
+                getString(R.string.continue_to_details)
             analysisMode == AnalysisMode.DENTAL -> getString(R.string.analyze_dental_images)
-            else -> getString(R.string.analyze_image)
+            else -> getString(R.string.capture_face_image)
         }
     }
 
@@ -415,10 +445,12 @@ class ImageAnalysisActivity : AppCompatActivity() {
 
     companion object {
         private const val EXTRA_ANALYSIS_MODE = "image_analysis_mode"
+        private const val EXTRA_ANALYSIS_PROVIDER = "image_analysis_provider"
 
-        fun newIntent(context: Context, mode: AnalysisMode): Intent {
+        fun newIntent(context: Context, mode: AnalysisMode, provider: AnalysisProvider): Intent {
             return Intent(context, ImageAnalysisActivity::class.java)
                 .putExtra(EXTRA_ANALYSIS_MODE, mode.id)
+                .putExtra(EXTRA_ANALYSIS_PROVIDER, provider.id)
         }
     }
 }

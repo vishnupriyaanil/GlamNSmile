@@ -16,6 +16,18 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.GlamNSmile">
         <activity
+            android:name=".ImagePreviewActivity"
+            android:exported="false" />
+        <activity
+            android:name=".AdminHistoryActivity"
+            android:exported="false" />
+        <activity
+            android:name=".AdminDataActivity"
+            android:exported="false" />
+        <activity
+            android:name=".LeadDetailsActivity"
+            android:exported="false" />
+        <activity
             android:name=".AnalysisResultActivity"
             android:exported="false" />
         <activity

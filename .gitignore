@@ -1,5 +1,6 @@
 # Gradle files
 .gradle/
+.gradle-local/
 .gradle-user-home/
 build/
 
