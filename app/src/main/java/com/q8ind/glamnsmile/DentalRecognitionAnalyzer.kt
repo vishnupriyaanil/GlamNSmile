@@ -1,19 +1,35 @@
 package com.q8ind.glamnsmile
 
+import android.graphics.RectF
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
+import androidx.camera.view.transform.CoordinateTransform
+import androidx.camera.view.transform.ImageProxyTransformFactory
+import androidx.camera.view.transform.OutputTransform
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.face.Face
+import com.google.mlkit.vision.face.FaceDetector
 import java.nio.ByteBuffer
+import java.util.concurrent.Executor
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
 import kotlin.math.hypot
+import kotlin.math.max
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 class DentalRecognitionAnalyzer(
+    private val detector: FaceDetector,
+    private val callbackExecutor: Executor,
+    private val previewOutputTransformProvider: () -> OutputTransform?,
+    private val onRoiRectUpdated: (RectF?) -> Unit,
     private val onStateChanged: (FaceCaptureUiState) -> Unit,
 ) : ImageAnalysis.Analyzer {
 
     private val isProcessing = AtomicBoolean(false)
+    private val imageTransformFactory = ImageProxyTransformFactory().apply {
+        isUsingRotationDegrees = true
+    }
 
     override fun analyze(imageProxy: ImageProxy) {
         if (!isProcessing.compareAndSet(false, true)) {
@@ -21,49 +37,162 @@ class DentalRecognitionAnalyzer(
             return
         }
 
+        var processingScheduled = false
         try {
-            onStateChanged(imageProxy.toDentalUiState())
+            val mediaImage = imageProxy.image
+            if (mediaImage == null) {
+                onStateChanged(FaceCaptureUiState.analyzerError("No camera frame available.", AnalysisMode.DENTAL))
+                onRoiRectUpdated(null)
+                return
+            }
+
+            val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
+            detector.process(image)
+                .addOnSuccessListener(callbackExecutor) { faces ->
+                    val dominantFace = faces.dominantFace()
+                    val mouthRect = dominantFace?.let { computeMouthRect(it) }
+                    onStateChanged(faces.toDentalUiState(imageProxy, mouthRect))
+                    onRoiRectUpdated(mapMouthRectToPreview(imageProxy, mouthRect))
+                }
+                .addOnFailureListener(callbackExecutor) { error ->
+                    val message = error.localizedMessage ?: "Unknown ML Kit error"
+                    onStateChanged(FaceCaptureUiState.analyzerError(message, AnalysisMode.DENTAL))
+                    onRoiRectUpdated(null)
+                }
+                .addOnCompleteListener(callbackExecutor) {
+                    isProcessing.set(false)
+                    imageProxy.close()
+                }
+            processingScheduled = true
+            return
         } catch (error: Exception) {
             val message = error.localizedMessage ?: "Unknown dental detection error"
             onStateChanged(FaceCaptureUiState.analyzerError(message, AnalysisMode.DENTAL))
+            onRoiRectUpdated(null)
         } finally {
-            isProcessing.set(false)
-            imageProxy.close()
+            if (!processingScheduled) {
+                isProcessing.set(false)
+                imageProxy.close()
+            }
         }
     }
 
-    private fun ImageProxy.toDentalUiState(): FaceCaptureUiState {
-        val sample = sampleLuma()
-        val metrics = sample.measureTeethSignal()
-        val ready = metrics.signal >= READY_SIGNAL_THRESHOLD &&
-            metrics.visibilityScore >= 0.35f &&
+    private fun List<Face>.dominantFace(): Face? {
+        return maxByOrNull { face -> face.boundingBox.width() * face.boundingBox.height() }
+    }
+
+    private fun computeMouthRect(face: Face): RectF {
+        val faceRect = RectF(face.boundingBox)
+        val mouthWidth = faceRect.width() * 0.78f
+        val mouthHeight = faceRect.height() * 0.34f
+        val centerX = faceRect.centerX()
+        val centerY = faceRect.top + faceRect.height() * 0.72f
+        val left = centerX - mouthWidth / 2f
+        val top = centerY - mouthHeight / 2f
+        val mouthRect = RectF(left, top, left + mouthWidth, top + mouthHeight)
+        mouthRect.inset(-mouthWidth * 0.08f, -mouthHeight * 0.25f)
+
+        val minTop = faceRect.top + faceRect.height() * 0.38f
+        if (mouthRect.top < minTop) {
+            mouthRect.top = minTop
+        }
+        mouthRect.left = mouthRect.left.coerceAtLeast(faceRect.left)
+        mouthRect.right = mouthRect.right.coerceAtMost(faceRect.right)
+        mouthRect.top = mouthRect.top.coerceAtLeast(faceRect.top)
+        mouthRect.bottom = mouthRect.bottom.coerceAtMost(faceRect.bottom)
+        return mouthRect
+    }
+
+    private fun mapMouthRectToPreview(imageProxy: ImageProxy, mouthRectUpright: RectF?): RectF? {
+        val rect = mouthRectUpright?.takeIf { !it.isEmpty } ?: return null
+        val previewTransform = previewOutputTransformProvider() ?: return null
+        val sourceTransform = imageTransformFactory.getOutputTransform(imageProxy)
+        val coordinateTransform = CoordinateTransform(sourceTransform, previewTransform)
+        val mapped = RectF(rect)
+        coordinateTransform.mapRect(mapped)
+        if (mapped.isEmpty) return null
+
+        val dx = mapped.width() * 0.12f
+        val dy = mapped.height() * 0.22f
+        mapped.inset(-dx, -dy)
+
+        mapped.left = mapped.left.coerceAtLeast(0f)
+        mapped.top = mapped.top.coerceAtLeast(0f)
+        mapped.right = mapped.right.coerceAtLeast(mapped.left + 1f)
+        mapped.bottom = mapped.bottom.coerceAtLeast(mapped.top + 1f)
+
+        val maxDim = 10000f
+        mapped.left = mapped.left.coerceAtMost(maxDim)
+        mapped.top = mapped.top.coerceAtMost(maxDim)
+        mapped.right = mapped.right.coerceAtMost(maxDim)
+        mapped.bottom = mapped.bottom.coerceAtMost(maxDim)
+
+        return mapped
+    }
+
+    private fun List<Face>.toDentalUiState(imageProxy: ImageProxy, mouthRectUpright: RectF?): FaceCaptureUiState {
+        if (isEmpty() || mouthRectUpright == null || mouthRectUpright.isEmpty) {
+            return FaceCaptureUiState(
+                statusText = "Searching for teeth...",
+                guidanceText = "Keep your face in frame and show your teeth.",
+                readinessLabel = "No face",
+            )
+        }
+
+        if (size > 1) {
+            return FaceCaptureUiState(
+                statusText = "$size faces detected",
+                guidanceText = "Keep only one face in view to enable capture.",
+                faceCount = size,
+                readinessLabel = "One face only",
+            )
+        }
+
+        val rotation = imageProxy.imageInfo.rotationDegrees
+        val uprightWidth = if (rotation % 180 == 0) imageProxy.width else imageProxy.height
+        val uprightHeight = if (rotation % 180 == 0) imageProxy.height else imageProxy.width
+        val frameArea = (uprightWidth * uprightHeight).coerceAtLeast(1)
+        val mouthArea = max(mouthRectUpright.width(), 1f) * max(mouthRectUpright.height(), 1f)
+        val mouthAreaRatio = mouthArea / frameArea.toFloat()
+        val targetCenterY = 0.58f
+        val centerXOffset = abs((mouthRectUpright.centerX() / uprightWidth.toFloat()) - 0.5f)
+        val centerYOffset = abs((mouthRectUpright.centerY() / uprightHeight.toFloat()) - targetCenterY)
+        val centered = centerXOffset < 0.20f && centerYOffset < 0.22f
+        val largeEnough = mouthAreaRatio >= 0.035f
+
+        val sample = imageProxy.sampleLuma()
+        val metrics = sample.measureTeethSignal(mouthRectUpright, uprightWidth, uprightHeight)
+        val teethVisible = metrics.veryBrightRatio >= TEETH_VISIBLE_MIN_RATIO
+        val ready = centered && largeEnough &&
+            metrics.signal >= READY_SIGNAL_THRESHOLD &&
+            metrics.visibilityScore >= 0.30f &&
             metrics.edgeScore >= 0.30f &&
-            metrics.centerScore >= 0.45f &&
-            metrics.sizeOk
+            metrics.contrastScore >= 0.24f &&
+            teethVisible
 
         val (statusText, guidanceText, readinessLabel) = when {
-            metrics.brightRatio < 0.012f ->
+            !largeEnough ->
+                Triple(
+                    "Move closer for dental capture.",
+                    "Move closer so the teeth occupy more of the frame.",
+                    "Move closer",
+                )
+
+            !centered ->
+                Triple(
+                    "Center teeth in the frame.",
+                    "Center the mouth in the frame before capturing.",
+                    "Center teeth",
+                )
+
+            !teethVisible ->
                 Triple(
                     "Searching for teeth...",
                     "Open your mouth slightly until the teeth are clearly visible.",
                     "Show teeth",
                 )
 
-            !metrics.sizeOk && metrics.brightRatio < 0.02f ->
-                Triple(
-                    "Dental area is too small.",
-                    "Move closer so the teeth occupy more of the frame.",
-                    "Move closer",
-                )
-
-            !metrics.sizeOk ->
-                Triple(
-                    "Dental area is too large.",
-                    "Move a little farther back so the full teeth area stays in frame.",
-                    "Reframe",
-                )
-
-            metrics.centerScore < 0.45f ->
+            metrics.centerScore < 0.35f ->
                 Triple(
                     "Teeth detected off-center.",
                     "Center the mouth in the frame before capturing.",
@@ -151,11 +280,20 @@ class DentalRecognitionAnalyzer(
         }
     }
 
-    private fun SampledLuma.measureTeethSignal(): DentalMetrics {
-        val left = (size * 0.22f).toInt()
-        val right = (size * 0.78f).toInt().coerceAtLeast(left + 2)
-        val top = (size * 0.36f).toInt()
-        val bottom = (size * 0.82f).toInt().coerceAtLeast(top + 2)
+    private fun SampledLuma.measureTeethSignal(uprightRoi: RectF, uprightWidth: Int, uprightHeight: Int): DentalMetrics {
+        if (uprightWidth <= 0 || uprightHeight <= 0) {
+            return DentalMetrics()
+        }
+
+        val safeLeft = uprightRoi.left.coerceIn(0f, uprightWidth.toFloat())
+        val safeTop = uprightRoi.top.coerceIn(0f, uprightHeight.toFloat())
+        val safeRight = uprightRoi.right.coerceIn(0f, uprightWidth.toFloat())
+        val safeBottom = uprightRoi.bottom.coerceIn(0f, uprightHeight.toFloat())
+
+        val left = ((safeLeft / uprightWidth.toFloat()) * size).toInt().coerceIn(0, size - 2)
+        val right = ((safeRight / uprightWidth.toFloat()) * size).toInt().coerceIn(left + 2, size)
+        val top = ((safeTop / uprightHeight.toFloat()) * size).toInt().coerceIn(0, size - 2)
+        val bottom = ((safeBottom / uprightHeight.toFloat()) * size).toInt().coerceIn(top + 2, size)
         val pixelCount = (right - left) * (bottom - top)
         if (pixelCount <= 0) {
             return DentalMetrics()
@@ -168,8 +306,8 @@ class DentalRecognitionAnalyzer(
             }
         }
         val mean = sum / pixelCount
-        val brightThreshold = maxOf(150, (mean + 22.0).roundToInt())
-        val veryBrightThreshold = maxOf(185, (mean + 40.0).roundToInt())
+        val brightThreshold = maxOf(155, (mean + 22.0).roundToInt())
+        val veryBrightThreshold = maxOf(190, (mean + 40.0).roundToInt())
 
         var varianceSum = 0.0
         var brightCount = 0
@@ -216,7 +354,6 @@ class DentalRecognitionAnalyzer(
         val highlightScore = normalize(veryBrightRatio, 0.005f, 0.05f)
         val contrastScore = normalize(stdDev.toFloat(), 0.10f, 0.22f)
         val edgeScore = normalize(edgeRatio, 0.06f, 0.22f)
-        val sizeOk = brightRatio in 0.015f..0.26f
         val signal = (
             (visibilityScore * 0.28f) +
                 (highlightScore * 0.12f) +
@@ -228,11 +365,11 @@ class DentalRecognitionAnalyzer(
         return DentalMetrics(
             signal = signal.roundToInt().coerceIn(0, 100),
             brightRatio = brightRatio,
+            veryBrightRatio = veryBrightRatio,
             visibilityScore = visibilityScore,
             contrastScore = contrastScore,
             edgeScore = edgeScore,
             centerScore = centerScore,
-            sizeOk = sizeOk,
         )
     }
 
@@ -259,16 +396,17 @@ class DentalRecognitionAnalyzer(
     private data class DentalMetrics(
         val signal: Int = 0,
         val brightRatio: Float = 0f,
+        val veryBrightRatio: Float = 0f,
         val visibilityScore: Float = 0f,
         val contrastScore: Float = 0f,
         val edgeScore: Float = 0f,
         val centerScore: Float = 0f,
-        val sizeOk: Boolean = false,
     )
 
     companion object {
         private const val SAMPLE_SIZE = 64
         private const val EDGE_THRESHOLD = 24
         private const val READY_SIGNAL_THRESHOLD = 58
+        private const val TEETH_VISIBLE_MIN_RATIO = 0.004f
     }
 }

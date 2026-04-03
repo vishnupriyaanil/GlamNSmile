@@ -26,13 +26,13 @@ data class FaceCaptureUiState(
             if (mode == AnalysisMode.DENTAL) {
                 FaceCaptureUiState(
                     statusText = "Camera permission is required before dental capture can start.",
-                    guidanceText = "Grant camera access to capture teeth images for Gemini analysis.",
+                    guidanceText = "Grant camera access to capture teeth images for analysis.",
                     readinessLabel = "Permission needed",
                 )
             } else {
                 FaceCaptureUiState(
                     statusText = "Camera permission is required before image analysis can start.",
-                    guidanceText = "Grant camera access to capture a face for Gemini analysis.",
+                    guidanceText = "Grant camera access to capture a face for analysis.",
                     readinessLabel = "Permission needed",
                 )
             }

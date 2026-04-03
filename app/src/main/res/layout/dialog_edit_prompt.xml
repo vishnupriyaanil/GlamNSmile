@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:paddingStart="20dp"
+    android:paddingTop="10dp"
+    android:paddingEnd="20dp"
+    android:paddingBottom="6dp">
+
+    <com.google.android.material.textfield.TextInputLayout
+        android:id="@+id/promptInputLayout"
+        style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        app:boxBackgroundColor="@color/surface_panel_strong"
+        app:boxStrokeColor="@color/status_outline"
+        app:hintTextColor="@color/mist_50_dim">
+
+        <com.google.android.material.textfield.TextInputEditText
+            android:id="@+id/promptEditText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="top|start"
+            android:inputType="textMultiLine|textCapSentences"
+            android:minLines="10"
+            android:textColor="@color/mist_50"
+            android:textColorHint="@color/mist_50_dim" />
+    </com.google.android.material.textfield.TextInputLayout>
+
+</FrameLayout>
+

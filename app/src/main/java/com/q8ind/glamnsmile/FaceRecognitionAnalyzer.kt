@@ -1,21 +1,32 @@
 package com.q8ind.glamnsmile
 
+import android.graphics.RectF
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
+import androidx.camera.view.transform.CoordinateTransform
+import androidx.camera.view.transform.ImageProxyTransformFactory
+import androidx.camera.view.transform.OutputTransform
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.face.Face
 import com.google.mlkit.vision.face.FaceDetector
 import java.util.concurrent.Executor
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
+import kotlin.math.max
+
 
 class FaceRecognitionAnalyzer(
     private val detector: FaceDetector,
     private val callbackExecutor: Executor,
+    private val previewOutputTransformProvider: () -> OutputTransform?,
+    private val onRoiRectUpdated: (RectF?) -> Unit,
     private val onStateChanged: (FaceCaptureUiState) -> Unit,
 ) : ImageAnalysis.Analyzer {
 
     private val isProcessing = AtomicBoolean(false)
+    private val imageTransformFactory = ImageProxyTransformFactory().apply {
+        isUsingRotationDegrees = true
+    }
 
     override fun analyze(imageProxy: ImageProxy) {
         val mediaImage = imageProxy.image
@@ -34,15 +45,68 @@ class FaceRecognitionAnalyzer(
         detector.process(image)
             .addOnSuccessListener(callbackExecutor) { faces ->
                 onStateChanged(faces.toUiState(imageProxy))
+                onRoiRectUpdated(mapDominantFaceRectToPreview(imageProxy, faces))
             }
             .addOnFailureListener(callbackExecutor) { error ->
                 val message = error.localizedMessage ?: "Unknown ML Kit error"
                 onStateChanged(FaceCaptureUiState.analyzerError(message))
+                onRoiRectUpdated(null)
             }
             .addOnCompleteListener(callbackExecutor) {
                 isProcessing.set(false)
                 imageProxy.close()
             }
+    }
+
+    private fun mapDominantFaceRectToPreview(imageProxy: ImageProxy, faces: List<Face>): RectF? {
+        if (faces.isEmpty()) return null
+        val previewTransform = previewOutputTransformProvider() ?: return null
+        val dominantFace = faces.maxByOrNull { face ->
+            face.boundingBox.width() * face.boundingBox.height()
+        } ?: return null
+
+        val sourceTransform = imageTransformFactory.getOutputTransform(imageProxy)
+        val coordinateTransform = CoordinateTransform(sourceTransform, previewTransform)
+
+        val faceRect = RectF(dominantFace.boundingBox)
+        coordinateTransform.mapRect(faceRect)
+
+        if (faceRect.isEmpty) return null
+
+        // Expand slightly to include forehead/chin and stabilize framing.
+        val dx = faceRect.width() * 0.18f
+        val dy = faceRect.height() * 0.30f
+        faceRect.inset(-dx, -dy)
+
+        // Normalize to a portrait-ish oval aspect ratio (width / height).
+        val targetAspect = 0.72f
+        val currentAspect = faceRect.width() / max(faceRect.height(), 1f)
+        if (currentAspect > targetAspect) {
+            val desiredHeight = faceRect.width() / targetAspect
+            val extra = desiredHeight - faceRect.height()
+            faceRect.top -= extra / 2f
+            faceRect.bottom += extra / 2f
+        } else {
+            val desiredWidth = faceRect.height() * targetAspect
+            val extra = desiredWidth - faceRect.width()
+            faceRect.left -= extra / 2f
+            faceRect.right += extra / 2f
+        }
+
+        // Clamp to the preview output bounds (same coordinate space as RoiOverlayView).
+        faceRect.left = faceRect.left.coerceAtLeast(0f)
+        faceRect.top = faceRect.top.coerceAtLeast(0f)
+        faceRect.right = faceRect.right.coerceAtLeast(faceRect.left + 1f)
+        faceRect.bottom = faceRect.bottom.coerceAtLeast(faceRect.top + 1f)
+
+        // The preview transform already maps into the view coordinate space. Keep rect sane.
+        val maxDim = 10000f
+        faceRect.left = faceRect.left.coerceAtMost(maxDim)
+        faceRect.top = faceRect.top.coerceAtMost(maxDim)
+        faceRect.right = faceRect.right.coerceAtMost(maxDim)
+        faceRect.bottom = faceRect.bottom.coerceAtMost(maxDim)
+
+        return faceRect
     }
 
     private fun List<Face>.toUiState(imageProxy: ImageProxy): FaceCaptureUiState {
@@ -87,7 +151,7 @@ class FaceRecognitionAnalyzer(
         }
 
         return FaceCaptureUiState(
-            statusText = if (ready) "Face ready for Gemini analysis." else "Face detected",
+            statusText = if (ready) "Face ready for analysis." else "Face detected",
             guidanceText = guidanceText,
             faceCount = 1,
             readinessLabel = readinessLabel,

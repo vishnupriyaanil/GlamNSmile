@@ -4,8 +4,14 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.RectF
 import android.os.Bundle
+import android.util.Rational
 import android.view.Surface
+import android.view.View
+import android.view.ViewGroup
+import android.widget.Toast
+import androidx.activity.addCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
@@ -13,15 +19,23 @@ import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.Preview
+import androidx.camera.core.UseCaseGroup
+import androidx.camera.core.ViewPort
 import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
+import androidx.camera.view.transform.OutputTransform
 import androidx.constraintlayout.widget.ConstraintLayout
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
+import androidx.core.view.GravityCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.isVisible
 import androidx.core.view.updateLayoutParams
 import androidx.core.view.updatePadding
+import androidx.core.view.ViewCompat.setTooltipText
+import androidx.lifecycle.observe
+import androidx.drawerlayout.widget.DrawerLayout
 import com.q8ind.glamnsmile.databinding.ActivityImageAnalysisBinding
 import com.google.mlkit.vision.face.FaceDetection
 import com.google.mlkit.vision.face.FaceDetector
@@ -29,6 +43,8 @@ import com.google.mlkit.vision.face.FaceDetectorOptions
 import java.io.File
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicReference
+import java.util.Locale
 
 class ImageAnalysisActivity : AppCompatActivity() {
 
@@ -45,6 +61,10 @@ class ImageAnalysisActivity : AppCompatActivity() {
     private var latestState: FaceCaptureUiState = FaceCaptureUiState(statusText = "", guidanceText = "")
     private var isCaptureInProgress = false
     private val capturedImageFiles = mutableListOf<File>()
+    private val capturedRoiSpecs = mutableListOf<String>()
+    private val previewOutputTransformRef = AtomicReference<OutputTransform?>(null)
+    private var adminTapCount = 0
+    private var adminUnlocked: Boolean = false
 
     private val cameraPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -63,19 +83,32 @@ class ImageAnalysisActivity : AppCompatActivity() {
         binding = ActivityImageAnalysisBinding.inflate(layoutInflater)
         setContentView(binding.root)
         applyWindowInsets()
-
-        analysisMode = AnalysisMode.fromId(intent.getStringExtra(EXTRA_ANALYSIS_MODE))
-        analysisProvider = AnalysisProvider.fromId(intent.getStringExtra(EXTRA_ANALYSIS_PROVIDER))
-        cameraExecutor = Executors.newSingleThreadExecutor()
-        faceDetector = if (analysisMode == AnalysisMode.FACIAL) {
-            FaceDetection.getClient(createFaceDetectorOptions())
-        } else {
-            null
+        binding.previewView.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+            updatePreviewOutputTransform()
+        }
+        binding.previewView.post { updatePreviewOutputTransform() }
+        binding.previewView.previewStreamState.observe(this) { streamState ->
+            if (streamState == PreviewView.StreamState.STREAMING) {
+                updatePreviewOutputTransform()
+            }
         }
 
-        configureModeUi()
+        analysisMode = intent.getStringExtra(EXTRA_ANALYSIS_MODE)
+            ?.let { AnalysisMode.fromId(it) }
+            ?: loadSelectedMode()
+        analysisProvider = intent.getStringExtra(EXTRA_ANALYSIS_PROVIDER)
+            ?.let { AnalysisProvider.fromId(it) }
+            ?: loadSelectedProvider()
+        persistSelectedMode(analysisMode)
+        persistSelectedProvider(analysisProvider)
+        PromptStore.hydrate(this)
+        cameraExecutor = Executors.newSingleThreadExecutor()
+        ensureDetectorForMode()
 
-        binding.captureToolbar.setNavigationOnClickListener { finish() }
+        configureModeUi()
+        ensureRoiOverlayFullScreen()
+
+        setupDrawerNavigation()
         binding.switchCameraButton.setOnClickListener { toggleCamera() }
         binding.permissionButton.setOnClickListener { requestCameraPermission() }
         binding.analyzeButton.setOnClickListener { handlePrimaryAction() }
@@ -95,6 +128,8 @@ class ImageAnalysisActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        ensureRoiOverlayFullScreen()
+        updatePreviewOutputTransform()
         if (hasCameraPermission()) {
             updatePermissionUi(true)
             startCamera()
@@ -109,11 +144,183 @@ class ImageAnalysisActivity : AppCompatActivity() {
         super.onDestroy()
     }
 
+    private fun ensureRoiOverlayFullScreen() {
+        binding.roiOverlay.updateLayoutParams<ConstraintLayout.LayoutParams> {
+            width = ViewGroup.LayoutParams.MATCH_PARENT
+            height = ViewGroup.LayoutParams.MATCH_PARENT
+            startToStart = ConstraintLayout.LayoutParams.PARENT_ID
+            endToEnd = ConstraintLayout.LayoutParams.PARENT_ID
+            topToTop = ConstraintLayout.LayoutParams.PARENT_ID
+            bottomToBottom = ConstraintLayout.LayoutParams.PARENT_ID
+            topToBottom = ConstraintLayout.LayoutParams.UNSET
+            bottomToTop = ConstraintLayout.LayoutParams.UNSET
+            startToEnd = ConstraintLayout.LayoutParams.UNSET
+            endToStart = ConstraintLayout.LayoutParams.UNSET
+        }
+        binding.roiOverlay.post {
+            binding.permissionOverlay.bringToFront()
+            binding.roiOverlay.invalidate()
+        }
+    }
+
+    private fun updatePreviewOutputTransform() {
+        previewOutputTransformRef.set(binding.previewView.outputTransform)
+    }
+
+    private fun setupDrawerNavigation() {
+        binding.captureToolbar.setNavigationOnClickListener {
+            binding.drawerLayout.openDrawer(GravityCompat.START)
+        }
+
+        setupDrawerHeader()
+        refreshAdminMenuVisibility()
+        binding.drawerLayout.addDrawerListener(object : DrawerLayout.SimpleDrawerListener() {
+            override fun onDrawerClosed(drawerView: View) {
+                if (drawerView == binding.navigationView) {
+                    adminTapCount = 0
+                }
+            }
+        })
+
+        binding.navigationView.setNavigationItemSelectedListener { item ->
+            val handled = when (item.itemId) {
+                R.id.nav_mode_face -> {
+                    applyAnalysisMode(AnalysisMode.FACIAL)
+                    true
+                }
+
+                R.id.nav_mode_dental -> {
+                    applyAnalysisMode(AnalysisMode.DENTAL)
+                    true
+                }
+
+                R.id.nav_provider_gemini -> {
+                    applyAnalysisProvider(AnalysisProvider.GEMINI)
+                    true
+                }
+
+                R.id.nav_provider_openai -> {
+                    applyAnalysisProvider(AnalysisProvider.OPENAI)
+                    true
+                }
+
+                R.id.nav_admin_history -> {
+                    startActivity(Intent(this, AdminDataActivity::class.java))
+                    true
+                }
+
+                R.id.nav_admin_prompts -> {
+                    startActivity(Intent(this, PromptTemplatesActivity::class.java))
+                    true
+                }
+
+                else -> false
+            }
+
+            if (handled) {
+                binding.drawerLayout.closeDrawer(GravityCompat.START)
+                refreshDrawerSelection()
+            }
+            handled
+        }
+
+        refreshDrawerSelection()
+
+        onBackPressedDispatcher.addCallback(this) {
+            if (binding.drawerLayout.isDrawerOpen(GravityCompat.START)) {
+                binding.drawerLayout.closeDrawer(GravityCompat.START)
+            } else {
+                finish()
+            }
+        }
+    }
+
+    private fun refreshDrawerSelection() {
+        fun icon(drawableId: Int) = ContextCompat.getDrawable(this, drawableId)
+
+        binding.navigationView.menu.findItem(R.id.nav_mode_face)?.icon =
+            icon(if (analysisMode == AnalysisMode.FACIAL) R.drawable.ic_radio_checked else R.drawable.ic_radio_unchecked)
+        binding.navigationView.menu.findItem(R.id.nav_mode_dental)?.icon =
+            icon(if (analysisMode == AnalysisMode.DENTAL) R.drawable.ic_radio_checked else R.drawable.ic_radio_unchecked)
+        binding.navigationView.menu.findItem(R.id.nav_provider_gemini)?.icon =
+            icon(if (analysisProvider == AnalysisProvider.GEMINI) R.drawable.ic_radio_checked else R.drawable.ic_radio_unchecked)
+        binding.navigationView.menu.findItem(R.id.nav_provider_openai)?.icon =
+            icon(if (analysisProvider == AnalysisProvider.OPENAI) R.drawable.ic_radio_checked else R.drawable.ic_radio_unchecked)
+    }
+
+    private fun setupDrawerHeader() {
+        if (binding.navigationView.headerCount <= 0) return
+
+        val headerView = binding.navigationView.getHeaderView(0)
+        val container = headerView.findViewById<View>(R.id.drawerHeaderContainer)
+        container.setOnClickListener { handleDrawerHeaderTap() }
+    }
+
+    private fun handleDrawerHeaderTap() {
+        adminTapCount += 1
+
+        if (adminTapCount >= ADMIN_TAP_COUNT_REQUIRED) {
+            adminTapCount = 0
+            adminUnlocked = !adminUnlocked
+            refreshAdminMenuVisibility()
+            Toast.makeText(
+                this,
+                getString(if (adminUnlocked) R.string.admin_unlocked_toast else R.string.admin_hidden_toast),
+                Toast.LENGTH_SHORT,
+            ).show()
+        }
+    }
+
+    private fun refreshAdminMenuVisibility() {
+        binding.navigationView.menu.findItem(R.id.nav_section_admin)?.isVisible = adminUnlocked
+        binding.navigationView.menu.findItem(R.id.nav_admin_history)?.isVisible = adminUnlocked
+        binding.navigationView.menu.findItem(R.id.nav_admin_prompts)?.isVisible = adminUnlocked
+    }
+
+    private fun applyAnalysisMode(mode: AnalysisMode) {
+        if (analysisMode == mode || isCaptureInProgress) {
+            return
+        }
+
+        analysisMode = mode
+        persistSelectedMode(mode)
+        ensureDetectorForMode()
+        binding.roiOverlay.setRoiOverride(null)
+        clearCapturedImages()
+        latestState = FaceCaptureUiState.initial(currentLensLabel(), analysisMode)
+        configureModeUi()
+        renderState(latestState)
+
+        if (hasCameraPermission()) {
+            startCamera()
+        } else {
+            updatePermissionUi(false)
+            renderState(FaceCaptureUiState.permissionRequired(analysisMode))
+        }
+    }
+
+    private fun applyAnalysisProvider(provider: AnalysisProvider) {
+        if (analysisProvider == provider) {
+            return
+        }
+
+        analysisProvider = provider
+        persistSelectedProvider(provider)
+        configureModeUi()
+    }
+
     private fun configureModeUi() {
         binding.captureToolbar.title = getString(analysisMode.captureTitleRes)
-        binding.captureToolbar.subtitle = getString(analysisMode.captureSubtitleRes)
+        binding.captureToolbar.subtitle = analysisProvider.displayName
         binding.captureSubtitleText.text = getString(analysisMode.captureSubtitleRes)
-        binding.captureProgressRow.isVisible = analysisMode.requiredImages > 1
+        binding.captureCountValue.isVisible = analysisMode.requiredImages > 1
+        binding.roiOverlay.setPreset(
+            if (analysisMode == AnalysisMode.DENTAL) {
+                RoiOverlayView.Preset.DENTAL
+            } else {
+                RoiOverlayView.Preset.FACE
+            },
+        )
         binding.detectionMetricLabel.setText(
             if (analysisMode == AnalysisMode.DENTAL) {
                 R.string.dental_capture_detection_label
@@ -121,6 +328,56 @@ class ImageAnalysisActivity : AppCompatActivity() {
                 R.string.image_capture_face_count
             },
         )
+    }
+
+    private fun ensureDetectorForMode() {
+        if (faceDetector == null) {
+            faceDetector = FaceDetection.getClient(createFaceDetectorOptions())
+        }
+    }
+
+    private fun loadSelectedProvider(): AnalysisProvider {
+        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        val storedId = prefs.getString(KEY_PROVIDER_ID, null)
+        val migrated = prefs.getBoolean(KEY_PROVIDER_DEFAULT_MIGRATED, false)
+
+        if (!migrated) {
+            val shouldSwitchToOpenAi = storedId.isNullOrBlank() || storedId == AnalysisProvider.GEMINI.id
+            if (shouldSwitchToOpenAi) {
+                prefs.edit()
+                    .putString(KEY_PROVIDER_ID, AnalysisProvider.OPENAI.id)
+                    .putBoolean(KEY_PROVIDER_DEFAULT_MIGRATED, true)
+                    .apply()
+                return AnalysisProvider.OPENAI
+            }
+
+            prefs.edit()
+                .putBoolean(KEY_PROVIDER_DEFAULT_MIGRATED, true)
+                .apply()
+        }
+
+        val effectiveId = storedId ?: AnalysisProvider.OPENAI.id
+        return AnalysisProvider.fromId(effectiveId)
+    }
+
+    private fun loadSelectedMode(): AnalysisMode {
+        val storedId = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .getString(KEY_MODE_ID, AnalysisMode.FACIAL.id)
+        return AnalysisMode.fromId(storedId)
+    }
+
+    private fun persistSelectedProvider(provider: AnalysisProvider) {
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .edit()
+            .putString(KEY_PROVIDER_ID, provider.id)
+            .apply()
+    }
+
+    private fun persistSelectedMode(mode: AnalysisMode) {
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .edit()
+            .putString(KEY_MODE_ID, mode.id)
+            .apply()
     }
 
     private fun toggleCamera() {
@@ -146,6 +403,10 @@ class ImageAnalysisActivity : AppCompatActivity() {
             (binding.statusCard.layoutParams as ConstraintLayout.LayoutParams).topMargin
         val actionCardBottomMargin =
             (binding.actionCard.layoutParams as ConstraintLayout.LayoutParams).bottomMargin
+        val navigationViewLeftPadding = binding.navigationView.paddingLeft
+        val navigationViewTopPadding = binding.navigationView.paddingTop
+        val navigationViewRightPadding = binding.navigationView.paddingRight
+        val navigationViewBottomPadding = binding.navigationView.paddingBottom
         val permissionOverlayLeftPadding = binding.permissionOverlay.paddingLeft
         val permissionOverlayTopPadding = binding.permissionOverlay.paddingTop
         val permissionOverlayRightPadding = binding.permissionOverlay.paddingRight
@@ -161,6 +422,13 @@ class ImageAnalysisActivity : AppCompatActivity() {
             binding.actionCard.updateLayoutParams<ConstraintLayout.LayoutParams> {
                 bottomMargin = actionCardBottomMargin + systemBars.bottom + bottomSafeSpacing
             }
+
+            binding.navigationView.updatePadding(
+                left = navigationViewLeftPadding + systemBars.left,
+                top = navigationViewTopPadding + systemBars.top,
+                right = navigationViewRightPadding,
+                bottom = navigationViewBottomPadding + systemBars.bottom,
+            )
 
             binding.permissionOverlay.updatePadding(
                 left = permissionOverlayLeftPadding + systemBars.left,
@@ -183,6 +451,11 @@ class ImageAnalysisActivity : AppCompatActivity() {
     }
 
     private fun startCamera() {
+        if (binding.previewView.width == 0 || binding.previewView.height == 0) {
+            binding.previewView.post { startCamera() }
+            return
+        }
+
         val existingProvider = cameraProvider
         if (existingProvider != null) {
             bindCameraUseCases(existingProvider)
@@ -200,6 +473,7 @@ class ImageAnalysisActivity : AppCompatActivity() {
     }
 
     private fun bindCameraUseCases(provider: ProcessCameraProvider) {
+        previewOutputTransformRef.set(null)
         val targetRotation = binding.previewView.display?.rotation ?: Surface.ROTATION_0
         val preview = Preview.Builder()
             .setTargetRotation(targetRotation)
@@ -207,13 +481,33 @@ class ImageAnalysisActivity : AppCompatActivity() {
             .also { it.surfaceProvider = binding.previewView.surfaceProvider }
 
         val analyzer: ImageAnalysis.Analyzer = if (analysisMode == AnalysisMode.DENTAL) {
-            DentalRecognitionAnalyzer(::onCaptureStateChanged)
+            val detector = faceDetector ?: run {
+                renderState(FaceCaptureUiState.cameraError("Face detector is not ready.", analysisMode))
+                return
+            }
+            DentalRecognitionAnalyzer(
+                detector = detector,
+                callbackExecutor = cameraExecutor,
+                previewOutputTransformProvider = previewOutputTransformRef::get,
+                onRoiRectUpdated = { rect ->
+                    runOnUiThread { binding.roiOverlay.setRoiOverride(rect) }
+                },
+                onStateChanged = ::onCaptureStateChanged,
+            )
         } else {
             val detector = faceDetector ?: run {
                 renderState(FaceCaptureUiState.cameraError("Face detector is not ready.", analysisMode))
                 return
             }
-            FaceRecognitionAnalyzer(detector, cameraExecutor, ::onCaptureStateChanged)
+            FaceRecognitionAnalyzer(
+                detector = detector,
+                callbackExecutor = cameraExecutor,
+                previewOutputTransformProvider = previewOutputTransformRef::get,
+                onRoiRectUpdated = { rect ->
+                    runOnUiThread { binding.roiOverlay.setRoiOverride(rect) }
+                },
+                onStateChanged = ::onCaptureStateChanged,
+            )
         }
         val analysis = ImageAnalysis.Builder()
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
@@ -234,9 +528,24 @@ class ImageAnalysisActivity : AppCompatActivity() {
             .requireLensFacing(lensFacing)
             .build()
 
+        val viewPort = ViewPort.Builder(
+            Rational(binding.previewView.width, binding.previewView.height),
+            targetRotation,
+        )
+            .setScaleType(ViewPort.FILL_CENTER)
+            .build()
+
+        val useCaseGroup = UseCaseGroup.Builder()
+            .setViewPort(viewPort)
+            .addUseCase(preview)
+            .addUseCase(analysis)
+            .addUseCase(capture)
+            .build()
+
         try {
             provider.unbindAll()
-            provider.bindToLifecycle(this, selector, preview, analysis, capture)
+            provider.bindToLifecycle(this, selector, useCaseGroup)
+            binding.previewView.post { updatePreviewOutputTransform() }
             if (!isCaptureInProgress) {
                 renderState(FaceCaptureUiState.initial(currentLensLabel(), analysisMode))
             }
@@ -255,10 +564,45 @@ class ImageAnalysisActivity : AppCompatActivity() {
 
     private fun handlePrimaryAction() {
         if (capturedImageFiles.size >= analysisMode.requiredImages && capturedImageFiles.isNotEmpty()) {
-            launchLeadDetails(capturedImageFiles.map(File::getAbsolutePath))
+            launchLeadDetails(
+                imagePaths = capturedImageFiles.map(File::getAbsolutePath),
+                roiSpecs = capturedRoiSpecs.toList(),
+            )
         } else {
             captureCurrentImage()
         }
+    }
+
+    private fun snapshotNormalizedRoiSpec(): String? {
+        val overlayWidth = binding.roiOverlay.width.toFloat()
+        val overlayHeight = binding.roiOverlay.height.toFloat()
+        if (overlayWidth <= 0f || overlayHeight <= 0f) {
+            return null
+        }
+
+        val roiRect = binding.roiOverlay.getRoiRect()
+        if (roiRect.isEmpty) {
+            return null
+        }
+
+        val left = (roiRect.left / overlayWidth).coerceIn(0f, 1f)
+        val top = (roiRect.top / overlayHeight).coerceIn(0f, 1f)
+        val right = (roiRect.right / overlayWidth).coerceIn(0f, 1f)
+        val bottom = (roiRect.bottom / overlayHeight).coerceIn(0f, 1f)
+
+        val normalized = RectF(left, top, right, bottom)
+        if (normalized.isEmpty || normalized.right <= normalized.left || normalized.bottom <= normalized.top) {
+            return null
+        }
+
+        return String.format(
+            Locale.US,
+            "%.6f,%.6f,%.6f,%.6f",
+            normalized.left,
+            normalized.top,
+            normalized.right,
+            normalized.bottom,
+        )
     }
 
     private fun captureCurrentImage() {
@@ -278,6 +622,7 @@ class ImageAnalysisActivity : AppCompatActivity() {
         isCaptureInProgress = true
         renderState(FaceCaptureUiState.capturing(analysisMode))
         capture.targetRotation = binding.previewView.display?.rotation ?: Surface.ROTATION_0
+        val roiSpec = snapshotNormalizedRoiSpec().orEmpty()
 
         val outputFile = File(cacheDir, "${analysisMode.id}-capture-${System.currentTimeMillis()}.jpg")
         val outputOptions = ImageCapture.OutputFileOptions.Builder(outputFile).build()
@@ -289,10 +634,14 @@ class ImageAnalysisActivity : AppCompatActivity() {
                 override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
                     isCaptureInProgress = false
                     capturedImageFiles += outputFile
+                    capturedRoiSpecs += roiSpec
 
                     if (capturedImageFiles.size >= analysisMode.requiredImages) {
                         renderState(latestState.copy(errorMessage = null))
-                        launchLeadDetails(capturedImageFiles.map(File::getAbsolutePath))
+                        launchLeadDetails(
+                            imagePaths = capturedImageFiles.map(File::getAbsolutePath),
+                            roiSpecs = capturedRoiSpecs.toList(),
+                        )
                     } else {
                         renderState(latestState.copy(errorMessage = null))
                     }
@@ -310,8 +659,8 @@ class ImageAnalysisActivity : AppCompatActivity() {
         )
     }
 
-    private fun launchLeadDetails(imagePaths: List<String>) {
-        startActivity(LeadDetailsActivity.newIntent(this, analysisMode, analysisProvider, imagePaths))
+    private fun launchLeadDetails(imagePaths: List<String>, roiSpecs: List<String>) {
+        startActivity(LeadDetailsActivity.newIntent(this, analysisMode, analysisProvider, imagePaths, roiSpecs))
     }
 
     private fun clearCapturedImages() {
@@ -321,6 +670,7 @@ class ImageAnalysisActivity : AppCompatActivity() {
             }
         }
         capturedImageFiles.clear()
+        capturedRoiSpecs.clear()
         renderState(latestState.copy(errorMessage = null))
     }
 
@@ -344,7 +694,9 @@ class ImageAnalysisActivity : AppCompatActivity() {
             binding.errorText.isVisible = state.errorMessage != null
             binding.errorText.text = state.errorMessage
             binding.analyzeButton.isEnabled = shouldEnablePrimaryAction(state)
-            binding.analyzeButton.text = primaryActionText()
+            val primaryActionLabel = primaryActionText()
+            binding.analyzeButton.contentDescription = primaryActionLabel
+            setTooltipText(binding.analyzeButton, primaryActionLabel)
             binding.switchCameraButton.isEnabled = hasCameraPermission() && !isCaptureInProgress
         }
     }
@@ -419,11 +771,13 @@ class ImageAnalysisActivity : AppCompatActivity() {
     }
 
     private fun updateCameraSwitchLabel() {
-        binding.switchCameraButton.text = if (lensFacing == CameraSelector.LENS_FACING_FRONT) {
+        val label = if (lensFacing == CameraSelector.LENS_FACING_FRONT) {
             getString(R.string.switch_to_back_camera)
         } else {
             getString(R.string.switch_to_front_camera)
         }
+        binding.switchCameraButton.contentDescription = label
+        setTooltipText(binding.switchCameraButton, label)
     }
 
     private fun currentLensLabel(): String {
@@ -444,6 +798,11 @@ class ImageAnalysisActivity : AppCompatActivity() {
     }
 
     companion object {
+        private const val PREFS_NAME = "analysis_preferences"
+        private const val KEY_PROVIDER_ID = "selected_provider_id"
+        private const val KEY_PROVIDER_DEFAULT_MIGRATED = "provider_default_migrated_openai"
+        private const val KEY_MODE_ID = "selected_mode_id"
+        private const val ADMIN_TAP_COUNT_REQUIRED = 5
         private const val EXTRA_ANALYSIS_MODE = "image_analysis_mode"
         private const val EXTRA_ANALYSIS_PROVIDER = "image_analysis_provider"
 

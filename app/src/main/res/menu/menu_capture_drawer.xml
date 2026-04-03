@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <item android:title="@string/drawer_section_analysis">
+        <menu>
+            <group android:id="@+id/group_mode">
+                <item
+                    android:id="@+id/nav_mode_face"
+                    android:icon="@drawable/ic_radio_unchecked"
+                    android:title="@string/home_face_badge" />
+                <item
+                    android:id="@+id/nav_mode_dental"
+                    android:icon="@drawable/ic_radio_unchecked"
+                    android:title="@string/home_dental_badge" />
+            </group>
+        </menu>
+    </item>
+
+    <item android:title="@string/drawer_section_providers">
+        <menu>
+            <group android:id="@+id/group_provider">
+                <item
+                    android:id="@+id/nav_provider_gemini"
+                    android:icon="@drawable/ic_radio_unchecked"
+                    android:title="@string/provider_gemini" />
+                <item
+                    android:id="@+id/nav_provider_openai"
+                    android:icon="@drawable/ic_radio_unchecked"
+                    android:title="@string/provider_openai" />
+            </group>
+        </menu>
+    </item>
+
+    <item
+        android:id="@+id/nav_section_admin"
+        android:title="@string/drawer_section_admin"
+        android:visible="false">
+        <menu>
+            <group android:id="@+id/group_admin">
+                <item
+                    android:id="@+id/nav_admin_history"
+                    android:icon="@drawable/ic_history"
+                    android:title="@string/drawer_item_history" />
+                <item
+                    android:id="@+id/nav_admin_prompts"
+                    android:icon="@drawable/ic_prompts"
+                    android:title="@string/drawer_item_prompts" />
+            </group>
+        </menu>
+    </item>
+
+</menu>

@@ -4,7 +4,13 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.BitmapShader
+import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.Matrix
+import android.graphics.Paint
+import android.graphics.RectF
+import android.graphics.Shader
 import android.media.ExifInterface
 import android.os.Bundle
 import android.view.View
@@ -24,6 +30,7 @@ import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileOutputStream
 import java.util.Locale
+import kotlin.math.roundToInt
 
 class AnalysisResultActivity : AppCompatActivity() {
 
@@ -36,6 +43,7 @@ class AnalysisResultActivity : AppCompatActivity() {
     private var analysisStartedAtMs: Long = 0L
     private lateinit var analysisMode: AnalysisMode
     private lateinit var analysisProvider: AnalysisProvider
+    private var roiSpecs: List<String> = emptyList()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -48,6 +56,7 @@ class AnalysisResultActivity : AppCompatActivity() {
 
         analysisMode = AnalysisMode.fromId(intent.getStringExtra(EXTRA_ANALYSIS_MODE))
         analysisProvider = AnalysisProvider.fromId(intent.getStringExtra(EXTRA_ANALYSIS_PROVIDER))
+        roiSpecs = intent.getStringArrayListExtra(EXTRA_ROI_SPECS).orEmpty()
         binding.generatedImageTitleText.text = getString(R.string.generated_image_title)
         binding.generatedImageCard.isVisible = false
 
@@ -57,20 +66,33 @@ class AnalysisResultActivity : AppCompatActivity() {
             ?: intent.getStringExtra(EXTRA_IMAGE_PATH)?.let(::listOf)
 
         if (imagePaths.isNullOrEmpty()) {
-            renderError("Missing image for Gemini analysis.")
+            renderError("Missing image for ${analysisProvider.displayName} analysis.")
             return
         }
 
-        val existingImageFiles = imagePaths
-            .map(::File)
-            .filter(File::exists)
+        val captureItems = imagePaths.mapIndexedNotNull { index, path ->
+            val file = File(path)
+            if (!file.exists()) {
+                null
+            } else {
+                val roiSpec = when {
+                    roiSpecs.isEmpty() -> ""
+                    roiSpecs.size == 1 -> roiSpecs.first()
+                    else -> roiSpecs.getOrNull(index).orEmpty()
+                }
+                file to roiSpec
+            }
+        }
+        val existingImageFiles = captureItems.map { it.first }
 
         if (existingImageFiles.isEmpty()) {
             renderError("Captured image file was not found.")
             return
         }
 
-        val normalizedImageFiles = existingImageFiles.map(::prepareImageForDisplayAndAnalysis)
+        val normalizedImageFiles = captureItems.map { (file, roiSpec) ->
+            prepareImageForDisplayAndAnalysis(file, roiSpec)
+        }
         preparedImageFiles.clear()
         preparedImageFiles.addAll(normalizedImageFiles)
         configureResultUi(preparedImageFiles.size)
@@ -179,20 +201,32 @@ class AnalysisResultActivity : AppCompatActivity() {
         binding.resultText.text = ""
         startTimingFeedback()
 
+        val prompt = PromptStore.getPrompt(this, analysisProvider, analysisMode)
+            ?.trim()
+            .orEmpty()
+        if (prompt.isBlank()) {
+            val promptId = PromptStore.documentId(analysisProvider, analysisMode)
+            renderError(
+                "Prompt template missing for ${analysisProvider.displayName} ${analysisMode.displayLabel} analysis. " +
+                    "Create Firestore doc `$promptId` in `analysis_prompts` with a non-empty `prompt` field.",
+            )
+            return
+        }
+
         if (analysisMode == AnalysisMode.FACIAL) {
             binding.statusText.text = getString(
                 R.string.analysis_generating_image_provider,
                 analysisProvider.displayName,
             )
             binding.placeholderText.text = getString(R.string.analysis_image_waiting_placeholder)
-            startFacialImageGeneration(apiKey, imageFiles.first())
+            startFacialImageGeneration(apiKey, imageFiles.first(), prompt)
         } else {
             binding.statusText.text = getString(
                 R.string.analysis_connecting_provider,
                 analysisProvider.displayName,
             )
             binding.placeholderText.text = getString(R.string.analysis_waiting_placeholder)
-            startStreamingTextAnalysis(apiKey, imageFiles)
+            startStreamingTextAnalysis(apiKey, imageFiles, prompt)
         }
     }
 
@@ -210,14 +244,14 @@ class AnalysisResultActivity : AppCompatActivity() {
         }
     }
 
-    private fun startFacialImageGeneration(apiKey: String, sourceImage: File) {
+    private fun startFacialImageGeneration(apiKey: String, sourceImage: File, prompt: String) {
         analysisJob = lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val result = when (analysisProvider) {
                     AnalysisProvider.GEMINI -> {
                         val geminiResult = NanoBananaImageClient(apiKey).generateFaceInfographic(
                             referenceImage = sourceImage,
-                            prompt = analysisMode.prompt,
+                            prompt = prompt,
                             outputDirectory = cacheDir,
                         )
                         OpenAiImageClient.Result(
@@ -228,7 +262,7 @@ class AnalysisResultActivity : AppCompatActivity() {
 
                     AnalysisProvider.OPENAI -> OpenAiImageClient(apiKey).generateFaceInfographic(
                         referenceImage = sourceImage,
-                        prompt = analysisMode.prompt,
+                        prompt = prompt,
                         outputDirectory = cacheDir,
                     )
                 }
@@ -266,7 +300,7 @@ class AnalysisResultActivity : AppCompatActivity() {
         }
     }
 
-    private fun startStreamingTextAnalysis(apiKey: String, imageFiles: List<File>) {
+    private fun startStreamingTextAnalysis(apiKey: String, imageFiles: List<File>, prompt: String) {
         analysisJob = lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val handleChunk: (String) -> Unit = { chunk ->
@@ -292,13 +326,13 @@ class AnalysisResultActivity : AppCompatActivity() {
                 when (analysisProvider) {
                     AnalysisProvider.GEMINI -> GeminiStreamingClient(apiKey).streamImageAnalysis(
                         imageFiles = imageFiles,
-                        prompt = analysisMode.prompt,
+                        prompt = prompt,
                         onChunk = handleChunk,
                     )
 
                     AnalysisProvider.OPENAI -> OpenAiStreamingClient(apiKey).streamImageAnalysis(
                         imageFiles = imageFiles,
-                        prompt = analysisMode.prompt,
+                        prompt = prompt,
                         onChunk = handleChunk,
                     )
                 }
@@ -318,7 +352,7 @@ class AnalysisResultActivity : AppCompatActivity() {
                 throw cancelled
             } catch (error: Exception) {
                 runOnUiThread {
-                    renderError(error.localizedMessage ?: "Gemini analysis failed.")
+                    renderError(error.localizedMessage ?: "${analysisProvider.displayName} analysis failed.")
                 }
             }
         }
@@ -387,7 +421,7 @@ class AnalysisResultActivity : AppCompatActivity() {
         return String.format(Locale.US, "%02d:%02d", minutes, seconds)
     }
 
-    private fun prepareImageForDisplayAndAnalysis(sourceFile: File): File {
+    private fun prepareImageForDisplayAndAnalysis(sourceFile: File, roiSpec: String): File {
         val options = BitmapFactory.Options().apply {
             inJustDecodeBounds = true
         }
@@ -407,17 +441,98 @@ class AnalysisResultActivity : AppCompatActivity() {
             ExifInterface.ORIENTATION_NORMAL,
         )
         val transformedBitmap = decodedBitmap.transformForExifOrientation(orientation)
+        val roiBitmap = buildRoiBitmap(transformedBitmap, roiSpec)
         val outputFile = File(cacheDir, "prepared-${sourceFile.name}")
 
         FileOutputStream(outputFile).use { outputStream ->
-            transformedBitmap.compress(Bitmap.CompressFormat.JPEG, 92, outputStream)
+            roiBitmap.compress(Bitmap.CompressFormat.JPEG, 92, outputStream)
         }
 
+        if (roiBitmap !== transformedBitmap) {
+            roiBitmap.recycle()
+        }
         if (transformedBitmap !== decodedBitmap) {
             decodedBitmap.recycle()
         }
         transformedBitmap.recycle()
         return outputFile
+    }
+
+    private fun buildRoiBitmap(bitmap: Bitmap, roiSpec: String): Bitmap {
+        val normalizedRoi = parseNormalizedRoiSpec(roiSpec)
+        val roiRectPx = when {
+            normalizedRoi != null -> RectF(
+                normalizedRoi.left * bitmap.width,
+                normalizedRoi.top * bitmap.height,
+                normalizedRoi.right * bitmap.width,
+                normalizedRoi.bottom * bitmap.height,
+            )
+
+            analysisMode == AnalysisMode.DENTAL -> RoiOverlayView.computeRoiRect(
+                bitmap.width,
+                bitmap.height,
+                RoiOverlayView.Preset.DENTAL,
+            )
+
+            else -> null
+        }
+
+        if (roiRectPx == null || roiRectPx.isEmpty) {
+            return bitmap
+        }
+
+        val cropped = cropBitmap(bitmap, roiRectPx) ?: return bitmap
+        if (analysisMode != AnalysisMode.FACIAL) {
+            return cropped
+        }
+
+        val output = Bitmap.createBitmap(cropped.width, cropped.height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(output)
+        canvas.drawColor(Color.BLACK)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            shader = BitmapShader(cropped, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
+        }
+        canvas.drawOval(RectF(0f, 0f, cropped.width.toFloat(), cropped.height.toFloat()), paint)
+        cropped.recycle()
+        return output
+    }
+
+    private fun parseNormalizedRoiSpec(value: String): RectF? {
+        val trimmed = value.trim()
+        if (trimmed.isBlank()) return null
+        val parts = trimmed.split(",")
+        if (parts.size != 4) return null
+
+        val left = parts[0].toFloatOrNull() ?: return null
+        val top = parts[1].toFloatOrNull() ?: return null
+        val right = parts[2].toFloatOrNull() ?: return null
+        val bottom = parts[3].toFloatOrNull() ?: return null
+
+        val normalized = RectF(
+            left.coerceIn(0f, 1f),
+            top.coerceIn(0f, 1f),
+            right.coerceIn(0f, 1f),
+            bottom.coerceIn(0f, 1f),
+        )
+        if (normalized.isEmpty || normalized.right <= normalized.left || normalized.bottom <= normalized.top) {
+            return null
+        }
+        return normalized
+    }
+
+    private fun cropBitmap(bitmap: Bitmap, roiRectPx: RectF): Bitmap? {
+        if (bitmap.width <= 0 || bitmap.height <= 0) return null
+
+        val left = roiRectPx.left.roundToInt().coerceIn(0, bitmap.width - 1)
+        val top = roiRectPx.top.roundToInt().coerceIn(0, bitmap.height - 1)
+        val right = roiRectPx.right.roundToInt().coerceIn(left + 1, bitmap.width)
+        val bottom = roiRectPx.bottom.roundToInt().coerceIn(top + 1, bitmap.height)
+        val width = (right - left).coerceAtLeast(1)
+        val height = (bottom - top).coerceAtLeast(1)
+
+        return runCatching {
+            Bitmap.createBitmap(bitmap, left, top, width, height)
+        }.getOrNull()
     }
 
     private fun calculateInSampleSize(width: Int, height: Int, maxDimension: Int): Int {
@@ -465,17 +580,20 @@ class AnalysisResultActivity : AppCompatActivity() {
         private const val EXTRA_ANALYSIS_PROVIDER = "analysis_result_provider"
         private const val EXTRA_IMAGE_PATH = "analysis_result_image_path"
         private const val EXTRA_IMAGE_PATHS = "analysis_result_image_paths"
+        private const val EXTRA_ROI_SPECS = "analysis_result_roi_specs"
 
         fun newIntent(
             context: Context,
             mode: AnalysisMode,
             provider: AnalysisProvider,
             imagePaths: List<String>,
+            roiSpecs: List<String> = emptyList(),
         ): Intent {
             return Intent(context, AnalysisResultActivity::class.java)
                 .putExtra(EXTRA_ANALYSIS_MODE, mode.id)
                 .putExtra(EXTRA_ANALYSIS_PROVIDER, provider.id)
                 .putStringArrayListExtra(EXTRA_IMAGE_PATHS, ArrayList(imagePaths))
+                .putStringArrayListExtra(EXTRA_ROI_SPECS, ArrayList(roiSpecs))
         }
     }
 }

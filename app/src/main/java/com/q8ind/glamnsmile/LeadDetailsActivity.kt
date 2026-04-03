@@ -19,6 +19,7 @@ class LeadDetailsActivity : AppCompatActivity() {
     private lateinit var analysisMode: AnalysisMode
     private lateinit var analysisProvider: AnalysisProvider
     private lateinit var imagePaths: List<String>
+    private lateinit var roiSpecs: List<String>
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -30,6 +31,7 @@ class LeadDetailsActivity : AppCompatActivity() {
         analysisMode = AnalysisMode.fromId(intent.getStringExtra(EXTRA_ANALYSIS_MODE))
         analysisProvider = AnalysisProvider.fromId(intent.getStringExtra(EXTRA_ANALYSIS_PROVIDER))
         imagePaths = intent.getStringArrayListExtra(EXTRA_IMAGE_PATHS)?.filter(String::isNotBlank).orEmpty()
+        roiSpecs = intent.getStringArrayListExtra(EXTRA_ROI_SPECS).orEmpty()
 
         binding.detailsToolbar.setNavigationOnClickListener { finish() }
         binding.modeSummaryText.text = getString(
@@ -93,7 +95,15 @@ class LeadDetailsActivity : AppCompatActivity() {
                 binding.saveButton.isEnabled = true
                 result.fold(
                     onSuccess = {
-                        startActivity(AnalysisResultActivity.newIntent(this, analysisMode, analysisProvider, imagePaths))
+                        startActivity(
+                            AnalysisResultActivity.newIntent(
+                                this,
+                                analysisMode,
+                                analysisProvider,
+                                imagePaths,
+                                roiSpecs,
+                            ),
+                        )
                         finish()
                     },
                     onFailure = { error ->
@@ -130,17 +140,20 @@ class LeadDetailsActivity : AppCompatActivity() {
         private const val EXTRA_ANALYSIS_MODE = "lead_details_mode"
         private const val EXTRA_ANALYSIS_PROVIDER = "lead_details_provider"
         private const val EXTRA_IMAGE_PATHS = "lead_details_image_paths"
+        private const val EXTRA_ROI_SPECS = "lead_details_roi_specs"
 
         fun newIntent(
             context: Context,
             mode: AnalysisMode,
             provider: AnalysisProvider,
             imagePaths: List<String>,
+            roiSpecs: List<String>,
         ): Intent {
             return Intent(context, LeadDetailsActivity::class.java)
                 .putExtra(EXTRA_ANALYSIS_MODE, mode.id)
                 .putExtra(EXTRA_ANALYSIS_PROVIDER, provider.id)
                 .putStringArrayListExtra(EXTRA_IMAGE_PATHS, ArrayList(imagePaths))
+                .putStringArrayListExtra(EXTRA_ROI_SPECS, ArrayList(roiSpecs))
         }
     }
 }

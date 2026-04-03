@@ -9,7 +9,35 @@
     <string name="home_provider_title">AI provider</string>
     <string name="home_provider_body">Choose the provider to use for both face and dental analysis.</string>
     <string name="provider_gemini">Gemini</string>
-    <string name="provider_openai">OpenAI</string>
+    <string name="provider_openai">Open AI</string>
+    <string name="drawer_section_analysis">Analysis</string>
+    <string name="drawer_section_providers">AI providers</string>
+    <string name="drawer_section_admin">Admin</string>
+    <string name="drawer_item_history">History</string>
+    <string name="drawer_item_prompts">Prompt templates</string>
+    <string name="admin_unlocked_toast">Admin options enabled.</string>
+    <string name="admin_hidden_toast">Admin options hidden.</string>
+
+    <string name="prompts_toolbar_title">Prompt templates</string>
+    <string name="prompts_toolbar_subtitle">Edit Firestore prompts used for analysis.</string>
+    <string name="prompts_loading">Loading prompt templates...</string>
+    <string name="prompts_loaded">Prompt templates</string>
+    <string name="prompts_load_failed">Could not load prompt templates.</string>
+    <string name="prompts_retry">Retry</string>
+    <string name="prompts_edit">Edit</string>
+    <string name="prompts_save">Save</string>
+    <string name="prompts_edit_title">Edit %1$s %2$s prompt</string>
+    <string name="prompts_error_empty">Prompt cannot be empty.</string>
+    <string name="prompts_saving">Saving prompt...</string>
+    <string name="prompts_saved">Prompt updated.</string>
+    <string name="prompts_saved_toast">Prompt updated</string>
+    <string name="prompts_save_failed">Could not update the prompt.</string>
+    <string name="prompts_missing_body">No prompt saved yet. Tap Edit to add one.</string>
+
+    <string name="splash_loading">Loading analysis prompts...</string>
+    <string name="splash_load_failed">Prompt templates are not ready.\n%1$s\nMissing: %2$s</string>
+    <string name="splash_retry">Retry</string>
+    <string name="splash_continue">Open camera</string>
     <string name="home_face_badge">Face analysis</string>
     <string name="home_dental_badge">Dental analysis</string>
     <string name="home_badge_face">1 image facial</string>
@@ -37,6 +65,7 @@
     <string name="grant_camera_access">Grant camera access</string>
     <string name="switch_to_back_camera">Use rear camera</string>
     <string name="switch_to_front_camera">Use front camera</string>
+    <string name="switch_camera">Switch camera</string>
     <string name="front_camera_label">Front camera</string>
     <string name="back_camera_label">Rear camera</string>
     <string name="metric_face_count">Face count</string>
@@ -65,6 +94,7 @@
     <string name="clear_images">Clear</string>
     <string name="capture_image_step">Capture %1$d of %2$d</string>
     <string name="capture_face_image">Capture image</string>
+    <string name="capture_image">Capture image</string>
     <string name="continue_to_details">Continue to details</string>
     <string name="analyze_image">Analyse</string>
     <string name="analyze_dental_images">Analyse dental images</string>

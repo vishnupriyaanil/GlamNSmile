@@ -9,7 +9,7 @@
         android:id="@+id/previewView"
         android:layout_width="0dp"
         android:layout_height="0dp"
-        app:implementationMode="performance"
+        app:implementationMode="compatible"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
@@ -500,6 +500,18 @@
                 android:visibility="gone" />
         </LinearLayout>
     </com.google.android.material.card.MaterialCardView>
+
+    <com.q8ind.glamnsmile.RoiOverlayView
+        android:id="@+id/roiOverlay"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:clickable="false"
+        android:focusable="false"
+        android:importantForAccessibility="no"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
 
     <LinearLayout
         android:id="@+id/permissionOverlay"

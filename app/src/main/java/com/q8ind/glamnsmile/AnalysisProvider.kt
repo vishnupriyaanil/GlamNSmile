@@ -10,7 +10,7 @@ enum class AnalysisProvider(
     ),
     OPENAI(
         id = "openai",
-        displayName = "OpenAI",
+        displayName = "Open AI",
     );
 
     companion object {

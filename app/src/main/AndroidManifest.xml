@@ -28,16 +28,16 @@
             android:name=".LeadDetailsActivity"
             android:exported="false" />
         <activity
+            android:name=".PromptTemplatesActivity"
+            android:exported="false" />
+        <activity
             android:name=".AnalysisResultActivity"
             android:exported="false" />
         <activity
             android:name=".ImageAnalysisActivity"
             android:exported="false" />
         <activity
-            android:name=".MainActivity"
-            android:exported="false" />
-        <activity
-            android:name=".HomeActivity"
+            android:name=".SplashActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -45,6 +45,12 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity
+            android:name=".MainActivity"
+            android:exported="false" />
+        <activity
+            android:name=".HomeActivity"
+            android:exported="false" />
     </application>
 
 </manifest>

@@ -3,6 +3,7 @@ package com.q8ind.glamnsmile
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.view.ViewGroup
 import androidx.constraintlayout.widget.ConstraintLayout
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -53,9 +54,11 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
         applyWindowInsets()
+        ensureRoiOverlayFullScreen()
 
         cameraExecutor = Executors.newSingleThreadExecutor()
         faceDetector = FaceDetection.getClient(createFaceDetectorOptions())
+        binding.roiOverlay.setPreset(RoiOverlayView.Preset.FACE)
 
         updateCameraSwitchLabel()
         renderState(FaceAnalysisUiState.initial(currentLensLabel()))
@@ -88,6 +91,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        ensureRoiOverlayFullScreen()
         if (hasCameraPermission()) {
             updatePermissionUi(true)
             startCamera()
@@ -100,6 +104,27 @@ class MainActivity : AppCompatActivity() {
         faceDetector?.close()
         cameraExecutor.shutdown()
         super.onDestroy()
+    }
+
+    private fun ensureRoiOverlayFullScreen() {
+        binding.roiOverlay.updateLayoutParams<ConstraintLayout.LayoutParams> {
+            width = ViewGroup.LayoutParams.MATCH_PARENT
+            height = ViewGroup.LayoutParams.MATCH_PARENT
+            startToStart = ConstraintLayout.LayoutParams.PARENT_ID
+            endToEnd = ConstraintLayout.LayoutParams.PARENT_ID
+            topToTop = ConstraintLayout.LayoutParams.PARENT_ID
+            bottomToBottom = ConstraintLayout.LayoutParams.PARENT_ID
+            topToBottom = ConstraintLayout.LayoutParams.UNSET
+            bottomToTop = ConstraintLayout.LayoutParams.UNSET
+            startToEnd = ConstraintLayout.LayoutParams.UNSET
+            endToStart = ConstraintLayout.LayoutParams.UNSET
+        }
+        binding.roiOverlay.elevation = resources.displayMetrics.density * 32f
+        binding.roiOverlay.post {
+            binding.roiOverlay.bringToFront()
+            binding.permissionOverlay.bringToFront()
+            binding.roiOverlay.invalidate()
+        }
     }
 
     private fun requestCameraPermission() {
