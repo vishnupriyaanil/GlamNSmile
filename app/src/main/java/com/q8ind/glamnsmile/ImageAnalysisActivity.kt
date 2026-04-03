@@ -16,9 +16,11 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.Camera
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.Preview
+import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.UseCaseGroup
 import androidx.camera.core.ViewPort
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -44,6 +46,7 @@ import java.io.File
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.TimeUnit
 import java.util.Locale
 
 class ImageAnalysisActivity : AppCompatActivity() {
@@ -57,12 +60,17 @@ class ImageAnalysisActivity : AppCompatActivity() {
     private var imageAnalysis: ImageAnalysis? = null
     private var imageCapture: ImageCapture? = null
     private var faceDetector: FaceDetector? = null
+    private var boundCamera: Camera? = null
     private var lensFacing: Int = CameraSelector.LENS_FACING_FRONT
     private var latestState: FaceCaptureUiState = FaceCaptureUiState(statusText = "", guidanceText = "")
     private var isCaptureInProgress = false
     private val capturedImageFiles = mutableListOf<File>()
     private val capturedRoiSpecs = mutableListOf<String>()
     private val previewOutputTransformRef = AtomicReference<OutputTransform?>(null)
+    private var lastMeteringAtMs: Long = 0L
+    private var lastExposureAdjustAtMs: Long = 0L
+    private var lastTorchAdjustAtMs: Long = 0L
+    private var autoTorchEnabled: Boolean = false
     private var adminTapCount = 0
     private var adminUnlocked: Boolean = false
 
@@ -139,6 +147,8 @@ class ImageAnalysisActivity : AppCompatActivity() {
     override fun onDestroy() {
         imageAnalysis?.clearAnalyzer()
         cameraProvider?.unbindAll()
+        disableAutoTorchIfNeeded()
+        boundCamera = null
         faceDetector?.close()
         cameraExecutor.shutdown()
         super.onDestroy()
@@ -165,6 +175,107 @@ class ImageAnalysisActivity : AppCompatActivity() {
 
     private fun updatePreviewOutputTransform() {
         previewOutputTransformRef.set(binding.previewView.outputTransform)
+    }
+
+    private fun handleRoiRectUpdated(rect: RectF?) {
+        binding.roiOverlay.setRoiOverride(rect)
+        maybeUpdateMetering(rect)
+    }
+
+    private fun maybeUpdateMetering(rect: RectF?) {
+        val camera = boundCamera ?: return
+        if (rect == null || rect.isEmpty) return
+        if (binding.previewView.width <= 0 || binding.previewView.height <= 0) return
+        if (!hasCameraPermission() || isCaptureInProgress) return
+
+        val now = System.currentTimeMillis()
+        if (now - lastMeteringAtMs < METERING_THROTTLE_MS) return
+        lastMeteringAtMs = now
+
+        val factory = binding.previewView.meteringPointFactory
+        val point = factory.createPoint(rect.centerX(), rect.centerY())
+        val flags = FocusMeteringAction.FLAG_AE or FocusMeteringAction.FLAG_AWB or
+            if (analysisMode == AnalysisMode.DENTAL) FocusMeteringAction.FLAG_AF else 0
+
+        val action = FocusMeteringAction.Builder(point, flags)
+            .setAutoCancelDuration(3, TimeUnit.SECONDS)
+            .build()
+
+        runCatching {
+            camera.cameraControl.startFocusAndMetering(action)
+        }
+    }
+
+    private fun handleMeanLumaUpdated(meanLuma: Float?) {
+        val value = meanLuma ?: return
+        maybeAdjustExposureCompensation(value)
+    }
+
+    private fun maybeAdjustExposureCompensation(meanLuma: Float) {
+        val camera = boundCamera ?: return
+        val exposureState = camera.cameraInfo.exposureState
+        if (!exposureState.isExposureCompensationSupported) return
+        if (!hasCameraPermission() || isCaptureInProgress) return
+
+        val now = System.currentTimeMillis()
+        if (now - lastExposureAdjustAtMs < EXPOSURE_THROTTLE_MS) return
+
+        val range = exposureState.exposureCompensationRange
+        val current = exposureState.exposureCompensationIndex
+        val desired = when {
+            meanLuma < EXPOSURE_MEAN_LOW -> current + 1
+            meanLuma > EXPOSURE_MEAN_HIGH -> current - 1
+            else -> current
+        }.coerceIn(range.lower, range.upper)
+
+        if (desired != current) {
+            lastExposureAdjustAtMs = now
+            runCatching {
+                camera.cameraControl.setExposureCompensationIndex(desired)
+            }
+        }
+    }
+
+    private fun handleDentalLightingUpdated(metrics: DentalRecognitionAnalyzer.AutoLightingMetrics?) {
+        if (metrics == null) return
+        handleMeanLumaUpdated(metrics.meanLuma)
+        maybeAutoTorch(metrics.meanLuma)
+    }
+
+    private fun maybeAutoTorch(meanLuma: Float) {
+        if (analysisMode != AnalysisMode.DENTAL || lensFacing != CameraSelector.LENS_FACING_BACK) {
+            disableAutoTorchIfNeeded()
+            return
+        }
+        if (!hasCameraPermission() || isCaptureInProgress) return
+
+        val camera = boundCamera ?: return
+        if (!camera.cameraInfo.hasFlashUnit()) return
+
+        val now = System.currentTimeMillis()
+        if (now - lastTorchAdjustAtMs < TORCH_THROTTLE_MS) return
+
+        val shouldEnable = meanLuma < TORCH_MEAN_ENABLE
+        val shouldDisable = meanLuma > TORCH_MEAN_DISABLE
+        when {
+            shouldEnable && !autoTorchEnabled -> {
+                lastTorchAdjustAtMs = now
+                autoTorchEnabled = true
+                runCatching { camera.cameraControl.enableTorch(true) }
+            }
+            shouldDisable && autoTorchEnabled -> {
+                lastTorchAdjustAtMs = now
+                autoTorchEnabled = false
+                runCatching { camera.cameraControl.enableTorch(false) }
+            }
+        }
+    }
+
+    private fun disableAutoTorchIfNeeded() {
+        val camera = boundCamera ?: return
+        if (!autoTorchEnabled) return
+        autoTorchEnabled = false
+        runCatching { camera.cameraControl.enableTorch(false) }
     }
 
     private fun setupDrawerNavigation() {
@@ -473,7 +584,12 @@ class ImageAnalysisActivity : AppCompatActivity() {
     }
 
     private fun bindCameraUseCases(provider: ProcessCameraProvider) {
+        disableAutoTorchIfNeeded()
         previewOutputTransformRef.set(null)
+        boundCamera = null
+        lastMeteringAtMs = 0L
+        lastExposureAdjustAtMs = 0L
+        lastTorchAdjustAtMs = 0L
         val targetRotation = binding.previewView.display?.rotation ?: Surface.ROTATION_0
         val preview = Preview.Builder()
             .setTargetRotation(targetRotation)
@@ -490,7 +606,10 @@ class ImageAnalysisActivity : AppCompatActivity() {
                 callbackExecutor = cameraExecutor,
                 previewOutputTransformProvider = previewOutputTransformRef::get,
                 onRoiRectUpdated = { rect ->
-                    runOnUiThread { binding.roiOverlay.setRoiOverride(rect) }
+                    runOnUiThread { handleRoiRectUpdated(rect) }
+                },
+                onAutoLightingUpdated = { metrics ->
+                    runOnUiThread { handleDentalLightingUpdated(metrics) }
                 },
                 onStateChanged = ::onCaptureStateChanged,
             )
@@ -504,7 +623,10 @@ class ImageAnalysisActivity : AppCompatActivity() {
                 callbackExecutor = cameraExecutor,
                 previewOutputTransformProvider = previewOutputTransformRef::get,
                 onRoiRectUpdated = { rect ->
-                    runOnUiThread { binding.roiOverlay.setRoiOverride(rect) }
+                    runOnUiThread { handleRoiRectUpdated(rect) }
+                },
+                onMeanLumaUpdated = { mean ->
+                    runOnUiThread { handleMeanLumaUpdated(mean) }
                 },
                 onStateChanged = ::onCaptureStateChanged,
             )
@@ -544,7 +666,7 @@ class ImageAnalysisActivity : AppCompatActivity() {
 
         try {
             provider.unbindAll()
-            provider.bindToLifecycle(this, selector, useCaseGroup)
+            boundCamera = provider.bindToLifecycle(this, selector, useCaseGroup)
             binding.previewView.post { updatePreviewOutputTransform() }
             if (!isCaptureInProgress) {
                 renderState(FaceCaptureUiState.initial(currentLensLabel(), analysisMode))
@@ -805,6 +927,14 @@ class ImageAnalysisActivity : AppCompatActivity() {
         private const val ADMIN_TAP_COUNT_REQUIRED = 5
         private const val EXTRA_ANALYSIS_MODE = "image_analysis_mode"
         private const val EXTRA_ANALYSIS_PROVIDER = "image_analysis_provider"
+
+        private const val METERING_THROTTLE_MS = 900L
+        private const val EXPOSURE_THROTTLE_MS = 800L
+        private const val TORCH_THROTTLE_MS = 1_200L
+        private const val TORCH_MEAN_ENABLE = 78f
+        private const val TORCH_MEAN_DISABLE = 110f
+        private const val EXPOSURE_MEAN_LOW = 80f
+        private const val EXPOSURE_MEAN_HIGH = 165f
 
         fun newIntent(context: Context, mode: AnalysisMode, provider: AnalysisProvider): Intent {
             return Intent(context, ImageAnalysisActivity::class.java)

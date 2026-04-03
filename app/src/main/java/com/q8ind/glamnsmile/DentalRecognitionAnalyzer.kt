@@ -23,6 +23,7 @@ class DentalRecognitionAnalyzer(
     private val callbackExecutor: Executor,
     private val previewOutputTransformProvider: () -> OutputTransform?,
     private val onRoiRectUpdated: (RectF?) -> Unit,
+    private val onAutoLightingUpdated: (AutoLightingMetrics?) -> Unit,
     private val onStateChanged: (FaceCaptureUiState) -> Unit,
 ) : ImageAnalysis.Analyzer {
 
@@ -132,6 +133,7 @@ class DentalRecognitionAnalyzer(
 
     private fun List<Face>.toDentalUiState(imageProxy: ImageProxy, mouthRectUpright: RectF?): FaceCaptureUiState {
         if (isEmpty() || mouthRectUpright == null || mouthRectUpright.isEmpty) {
+            onAutoLightingUpdated(null)
             return FaceCaptureUiState(
                 statusText = "Searching for teeth...",
                 guidanceText = "Keep your face in frame and show your teeth.",
@@ -140,6 +142,7 @@ class DentalRecognitionAnalyzer(
         }
 
         if (size > 1) {
+            onAutoLightingUpdated(null)
             return FaceCaptureUiState(
                 statusText = "$size faces detected",
                 guidanceText = "Keep only one face in view to enable capture.",
@@ -163,6 +166,12 @@ class DentalRecognitionAnalyzer(
         val sample = imageProxy.sampleLuma()
         val metrics = sample.measureTeethSignal(mouthRectUpright, uprightWidth, uprightHeight)
         val teethVisible = metrics.veryBrightRatio >= TEETH_VISIBLE_MIN_RATIO
+        onAutoLightingUpdated(
+            AutoLightingMetrics(
+                meanLuma = metrics.meanLuma,
+                signal = metrics.signal,
+            ),
+        )
         val ready = centered && largeEnough &&
             metrics.signal >= READY_SIGNAL_THRESHOLD &&
             metrics.visibilityScore >= 0.30f &&
@@ -364,6 +373,7 @@ class DentalRecognitionAnalyzer(
 
         return DentalMetrics(
             signal = signal.roundToInt().coerceIn(0, 100),
+            meanLuma = mean.toFloat(),
             brightRatio = brightRatio,
             veryBrightRatio = veryBrightRatio,
             visibilityScore = visibilityScore,
@@ -395,6 +405,7 @@ class DentalRecognitionAnalyzer(
 
     private data class DentalMetrics(
         val signal: Int = 0,
+        val meanLuma: Float = 0f,
         val brightRatio: Float = 0f,
         val veryBrightRatio: Float = 0f,
         val visibilityScore: Float = 0f,
@@ -409,4 +420,9 @@ class DentalRecognitionAnalyzer(
         private const val READY_SIGNAL_THRESHOLD = 58
         private const val TEETH_VISIBLE_MIN_RATIO = 0.004f
     }
+
+    data class AutoLightingMetrics(
+        val meanLuma: Float,
+        val signal: Int,
+    )
 }

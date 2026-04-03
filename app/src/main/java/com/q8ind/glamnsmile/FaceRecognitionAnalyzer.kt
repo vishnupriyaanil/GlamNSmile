@@ -20,6 +20,7 @@ class FaceRecognitionAnalyzer(
     private val callbackExecutor: Executor,
     private val previewOutputTransformProvider: () -> OutputTransform?,
     private val onRoiRectUpdated: (RectF?) -> Unit,
+    private val onMeanLumaUpdated: (Float?) -> Unit,
     private val onStateChanged: (FaceCaptureUiState) -> Unit,
 ) : ImageAnalysis.Analyzer {
 
@@ -46,11 +47,19 @@ class FaceRecognitionAnalyzer(
             .addOnSuccessListener(callbackExecutor) { faces ->
                 onStateChanged(faces.toUiState(imageProxy))
                 onRoiRectUpdated(mapDominantFaceRectToPreview(imageProxy, faces))
+                val dominantFace = faces.maxByOrNull { face ->
+                    face.boundingBox.width() * face.boundingBox.height()
+                }
+                val meanLuma = dominantFace?.let { face ->
+                    imageProxy.sampleMeanLuma(RectF(face.boundingBox))
+                }
+                onMeanLumaUpdated(meanLuma)
             }
             .addOnFailureListener(callbackExecutor) { error ->
                 val message = error.localizedMessage ?: "Unknown ML Kit error"
                 onStateChanged(FaceCaptureUiState.analyzerError(message))
                 onRoiRectUpdated(null)
+                onMeanLumaUpdated(null)
             }
             .addOnCompleteListener(callbackExecutor) {
                 isProcessing.set(false)
@@ -157,5 +166,67 @@ class FaceRecognitionAnalyzer(
             readinessLabel = readinessLabel,
             canAnalyze = ready,
         )
+    }
+
+    private fun ImageProxy.sampleMeanLuma(uprightRect: RectF, samples: Int = 12): Float? {
+        if (width <= 0 || height <= 0) return null
+        val plane = planes.firstOrNull() ?: return null
+        val buffer = plane.buffer
+        val rowStride = plane.rowStride
+        val pixelStride = plane.pixelStride
+        val rotation = imageInfo.rotationDegrees
+        val uprightWidth = if (rotation % 180 == 0) width else height
+        val uprightHeight = if (rotation % 180 == 0) height else width
+
+        val safeLeft = uprightRect.left.coerceIn(0f, uprightWidth.toFloat())
+        val safeTop = uprightRect.top.coerceIn(0f, uprightHeight.toFloat())
+        val safeRight = uprightRect.right.coerceIn(0f, uprightWidth.toFloat())
+        val safeBottom = uprightRect.bottom.coerceIn(0f, uprightHeight.toFloat())
+        val safe = RectF(safeLeft, safeTop, safeRight, safeBottom)
+        if (safe.isEmpty) return null
+
+        var sum = 0L
+        var count = 0
+        for (yIndex in 0 until samples) {
+            val uprightY = (safe.top + ((yIndex + 0.5f) / samples) * safe.height())
+                .toInt()
+                .coerceIn(0, uprightHeight - 1)
+            for (xIndex in 0 until samples) {
+                val uprightX = (safe.left + ((xIndex + 0.5f) / samples) * safe.width())
+                    .toInt()
+                    .coerceIn(0, uprightWidth - 1)
+                val (sourceX, sourceY) = mapUprightToSource(
+                    uprightX = uprightX,
+                    uprightY = uprightY,
+                    sourceWidth = width,
+                    sourceHeight = height,
+                    rotation = rotation,
+                )
+                val safeX = sourceX.coerceIn(0, width - 1)
+                val safeY = sourceY.coerceIn(0, height - 1)
+                val index = safeY * rowStride + safeX * pixelStride
+                if (index >= 0 && index < buffer.limit()) {
+                    sum += buffer.get(index).toInt() and 0xFF
+                    count += 1
+                }
+            }
+        }
+
+        return if (count > 0) sum.toFloat() / count.toFloat() else null
+    }
+
+    private fun mapUprightToSource(
+        uprightX: Int,
+        uprightY: Int,
+        sourceWidth: Int,
+        sourceHeight: Int,
+        rotation: Int,
+    ): Pair<Int, Int> {
+        return when (rotation) {
+            90 -> uprightY to (sourceHeight - 1 - uprightX)
+            180 -> (sourceWidth - 1 - uprightX) to (sourceHeight - 1 - uprightY)
+            270 -> (sourceWidth - 1 - uprightY) to uprightX
+            else -> uprightX to uprightY
+        }
     }
 }
